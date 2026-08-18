@@ -48,7 +48,16 @@
           <td class="muted">{{ c.activated_at|dt }}</td>
           <td class="muted">{{ c.expires_at|dt if c.expires_at else ('永久' if c.type and c.type.is_permanent else '-') }}</td>
           <td class="mono muted">{{ c.batch_no }}</td>
-          <td class="right"><a class="btn sm" href="/admin/cards/{{ c.id }}">详情</a></td>
+          <td class="right">
+            {% if c.bound_count > 0 %}
+            <form class="inline-form" method="post" action="/admin/cards/{{ c.id }}/unbind-devices"
+                  onsubmit="return confirm('解绑该卡的全部 {{ c.bound_count }} 台设备?')">
+              <input type="hidden" name="back" value="/admin/cards?{{ request.url.query }}">
+              <button class="btn sm" type="submit">解绑</button>
+            </form>
+            {% endif %}
+            <a class="btn sm" href="/admin/cards/{{ c.id }}">详情</a>
+          </td>
         </tr>
       {% else %}
         <tr><td colspan="8" class="muted">没有匹配的卡密</td></tr>

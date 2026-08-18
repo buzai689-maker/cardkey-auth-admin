@@ -4,41 +4,62 @@
 {% block content %}
 <div class="page-head"><h1>生成卡密</h1></div>
 
-<div class="panel" style="max-width:640px">
-  {% if types %}
+<div class="panel" style="max-width:660px">
   <form method="post" action="/admin/cards/generate">
-    <label>卡类型 <span class="req">*</span>
-      <select name="type_id" required>
-        {% for t in types %}
-        <option value="{{ t.id }}">{{ t.name }} · {{ t.duration_label }} · 可绑 {{ t.max_devices }} 台</option>
-        {% endfor %}
-      </select>
-    </label>
+    <div class="btn-row" style="margin-bottom:14px">
+      {% for d, l in [(1,'日卡'),(7,'周卡'),(30,'月卡'),(90,'季卡'),(365,'年卡')] %}
+      <button type="button" class="btn sm" onclick="setDays({{ d }})">{{ l }} ({{ d }}天)</button>
+      {% endfor %}
+      <button type="button" class="btn sm" onclick="setPerm()">永久</button>
+    </div>
+
     <div class="form-row">
-      <label>数量 <span class="req">*</span>
+      <label>授权天数 <span class="req">*</span>
+        <input name="days" type="number" value="30" min="0" id="days-input">
+      </label>
+      <label>授权设备数 <span class="req">*</span>
+        <input name="max_devices" type="number" value="1" min="1" max="99">
+      </label>
+      <label>生成数量 <span class="req">*</span>
         <input name="count" type="number" value="10" min="1" max="5000" required>
       </label>
-      <label>前缀
-        <input name="prefix" placeholder="如 VIP-" maxlength="16">
-      </label>
-      <label>随机长度
-        <input name="length" type="number" value="16" min="4" max="64">
-      </label>
-      <label>分组长度 (0=不分组)
-        <input name="group_size" type="number" value="4" min="0" max="8">
-      </label>
     </div>
-    <label>备注
-      <input name="remark" placeholder="可选,标记本批用途">
+
+    <label class="checkbox">
+      <input type="checkbox" name="is_permanent" value="1" id="perm-input"
+             onchange="document.getElementById('days-input').disabled = this.checked">
+      永久卡(忽略天数)
     </label>
+
+    <div class="form-row">
+      <label>前缀<input name="prefix" placeholder="如 VIP-" maxlength="16"></label>
+      <label>随机长度<input name="length" type="number" value="16" min="4" max="64"></label>
+      <label>分组长度 (0=不分组)<input name="group_size" type="number" value="4" min="0" max="8"></label>
+    </div>
+
+    <label>备注<input name="remark" placeholder="可选,标记本批用途"></label>
     <button class="btn primary" type="submit">生成</button>
   </form>
+
   <p class="muted" style="margin-top:14px">
-    生成的是随机唯一码(去除易混字符 0/O/1/I/l)。示例:<code class="mono">VIP-A7C4-9K2M-7Q3D-5W8H</code>。
-    生成后可在卡密列表按批次筛选并导出为 txt 分发。
+    直接按「授权天数 + 授权设备数」生成:每张卡首次激活时开始计时,最多可绑定所填数量的设备。
+    生成的是随机唯一码(去易混字符 0/O/1/I/l),示例 <code class="mono">VIP-A7C4-9K2M-7Q3D-5W8H</code>。
+    相同天数/设备数的批次会自动归到同一卡类型,生成后可在卡密列表按批次筛选并导出 txt。
   </p>
-  {% else %}
-  <p class="muted">还没有可用的卡类型,请先到 <a href="/admin/card-types">卡类型</a> 创建(如 天卡 / 月卡 / 永久卡)。</p>
-  {% endif %}
 </div>
+
+<script>
+function setDays(d) {
+  var perm = document.getElementById('perm-input');
+  perm.checked = false;
+  var x = document.getElementById('days-input');
+  x.disabled = false;
+  x.value = d;
+}
+function setPerm() {
+  var perm = document.getElementById('perm-input');
+  perm.checked = true;
+  document.getElementById('days-input').disabled = true;
+}
+</script>
 {% endblock %}

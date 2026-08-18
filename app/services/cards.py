@@ -48,6 +48,58 @@ def generate_cards(
     return batch, created
 
 
+def find_or_create_time_type(db, days: int, is_permanent: bool, max_devices: int) -> CardType:
+    """Reuse (or lazily create) a time card template matching days + device count.
+
+    Lets the generate page work directly off 授权天数 / 授权设备数 without the
+    operator having to pre-define card types; identical (days, devices) combos
+    collapse onto one template instead of piling up duplicates.
+    """
+    duration = 0 if is_permanent else max(0, days) * 1440
+    max_devices = max(1, max_devices)
+    t = (
+        db.query(CardType)
+        .filter_by(
+            kind="time",
+            is_permanent=is_permanent,
+            duration_minutes=duration,
+            max_devices=max_devices,
+            total_count=0,
+        )
+        .first()
+    )
+    if t:
+        return t
+    name = f"永久·{max_devices}设备" if is_permanent else f"{days}天·{max_devices}设备"
+    t = CardType(
+        name=name,
+        kind="time",
+        duration_minutes=duration,
+        is_permanent=is_permanent,
+        total_count=0,
+        max_devices=max_devices,
+        is_active=True,
+        remark="生成时自动创建",
+    )
+    db.add(t)
+    db.commit()
+    return t
+
+
+def unbind_all_devices(db, card: Card) -> int:
+    """Unbind every active device of a card (frees binding slots), keeping the
+    card's own status/expiry unchanged. Returns how many were unbound."""
+    n = 0
+    for d in card.devices:
+        if d.status == "active":
+            d.status = "unbound"
+            d.unbound_at = datetime.now()
+            n += 1
+    if n:
+        db.commit()
+    return n
+
+
 def set_status(db, card: Card, status: str) -> None:
     card.status = status
     db.commit()

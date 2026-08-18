@@ -10,6 +10,10 @@
     {% else %}
       <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/ban"><button class="btn">封禁</button></form>
     {% endif %}
+    {% if card.bound_count > 0 %}
+    <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/unbind-devices"
+          onsubmit="return confirm('解绑该卡全部 {{ card.bound_count }} 台设备?(不改变卡状态/到期)')"><button class="btn">解绑全部设备</button></form>
+    {% endif %}
     <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/reset"
           onsubmit="return confirm('重置将解绑全部设备并回到未使用状态,确认?')"><button class="btn">重置</button></form>
     <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/delete"

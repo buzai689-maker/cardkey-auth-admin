@@ -57,14 +57,15 @@ def generate_form(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    types = db.query(CardType).filter_by(is_active=True).order_by(CardType.id.desc()).all()
-    return render(request, "admin/cards_generate.html", active="generate", types=types)
+    return render(request, "admin/cards_generate.html", active="generate")
 
 
 @router.post("/generate")
 def generate_do(
     request: Request,
-    type_id: int = Form(...),
+    days: int = Form(30),
+    is_permanent: str = Form(""),
+    max_devices: int = Form(1),
     count: int = Form(...),
     prefix: str = Form(""),
     length: int = Form(16),
@@ -73,12 +74,13 @@ def generate_do(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    ct = db.get(CardType, type_id)
-    if not ct:
-        flash(request, "卡类型不存在", "danger")
-        return RedirectResponse("/admin/cards/generate", status_code=303)
+    permanent = bool(is_permanent)
+    days = max(0, to_int(days))
+    max_devices = max(1, min(to_int(max_devices, 1), 99))
     count = max(1, min(to_int(count, 1), 5000))
     length = max(4, min(to_int(length, 16), 64))
+
+    ct = card_svc.find_or_create_time_type(db, days, permanent, max_devices)
     batch, created = card_svc.generate_cards(
         db,
         ct,
@@ -89,8 +91,13 @@ def generate_do(
         created_by=admin.username,
         remark=remark.strip(),
     )
-    log_action(db, request, "card.generate", batch, f"{ct.name} x{len(created)}")
-    flash(request, f"已生成 {len(created)} 张卡密 (批次 {batch})", "ok")
+    span = "永久" if permanent else f"{days}天"
+    log_action(db, request, "card.generate", batch, f"{span}/{max_devices}设备 x{len(created)}")
+    flash(
+        request,
+        f"已生成 {len(created)} 张卡密 · {span} · 授权 {max_devices} 台 (批次 {batch})",
+        "ok",
+    )
     return RedirectResponse(f"/admin/cards?batch={batch}", status_code=303)
 
 
@@ -204,6 +211,23 @@ def card_reset(
         log_action(db, request, "card.reset", card.code, "解绑全部设备并重置")
         flash(request, "卡密已重置(解绑全部设备)", "ok")
     return RedirectResponse(f"/admin/cards/{card_id}", status_code=303)
+
+
+@router.post("/{card_id}/unbind-devices")
+def card_unbind_devices(
+    card_id: int,
+    request: Request,
+    back: str = Form(""),
+    admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Unbind all devices of a card WITHOUT resetting its status/expiry."""
+    card = db.get(Card, card_id)
+    if card:
+        n = card_svc.unbind_all_devices(db, card)
+        log_action(db, request, "card.unbind_all", card.code, f"unbound={n}")
+        flash(request, f"已解绑 {n} 台设备", "ok" if n else "info")
+    return RedirectResponse(back or f"/admin/cards/{card_id}", status_code=303)
 
 
 @router.post("/{card_id}/delete")
