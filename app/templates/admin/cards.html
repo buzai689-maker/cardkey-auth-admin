@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}卡密管理 · {{ site.site_name }}{% endblock %}
+{% block crumb %}卡密管理{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>卡密管理</h1>
+  <div class="btn-row">
+    <a class="btn" href="/admin/cards/export?status={{ f.status }}&type_id={{ f.type_id }}&batch={{ f.batch }}&q={{ f.q }}">导出当前筛选</a>
+    <a class="btn primary" href="/admin/cards/generate">＋ 生成卡密</a>
+  </div>
+</div>
+
+<form class="filters" method="get" action="/admin/cards">
+  <label>状态
+    <select name="status">
+      <option value="">全部</option>
+      {% for s in ['unused','active','banned'] %}
+      <option value="{{ s }}" {{ 'selected' if f.status == s else '' }}>{{ s|status_label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>类型
+    <select name="type_id">
+      <option value="0">全部</option>
+      {% for t in types %}
+      <option value="{{ t.id }}" {{ 'selected' if f.type_id == t.id else '' }}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>批次<input name="batch" value="{{ f.batch }}" placeholder="批次号"></label>
+  <label>关键字<input name="q" value="{{ f.q }}" placeholder="卡密片段"></label>
+  <button class="btn" type="submit">筛选</button>
+</form>
+
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>卡密</th><th>类型</th><th>状态</th><th>设备</th><th>激活时间</th><th>到期时间</th><th>批次</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for c in cards %}
+        <tr>
+          <td><a href="/admin/cards/{{ c.id }}" class="mono">{{ c.code }}</a></td>
+          <td>{{ c.type.name if c.type else '-' }}</td>
+          <td><span class="badge {{ c.effective_status|status_class }}">{{ c.effective_status|status_label }}</span></td>
+          <td>{{ c.bound_count }} / {{ c.max_devices }}</td>
+          <td class="muted">{{ c.activated_at|dt }}</td>
+          <td class="muted">{{ c.expires_at|dt if c.expires_at else ('永久' if c.type and c.type.is_permanent else '-') }}</td>
+          <td class="mono muted">{{ c.batch_no }}</td>
+          <td class="right"><a class="btn sm" href="/admin/cards/{{ c.id }}">详情</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">没有匹配的卡密</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "admin/_pagination.html" %}
+</div>
+{% endblock %}

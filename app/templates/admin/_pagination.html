@@ -1,0 +1,12 @@
+{% if pg and pg.pages > 1 %}
+<div class="pagination">
+  {% set parts = [] %}
+  {% for k, v in request.query_params.multi_items() if k != 'page' %}{% set _ = parts.append(k ~ '=' ~ v) %}{% endfor %}
+  {% set qs = parts | join('&') %}
+  {% set base = '?' ~ qs ~ ('&' if qs else '') %}
+  {% if pg.page > 1 %}<a href="{{ base }}page={{ pg.page - 1 }}">上一页</a>{% endif %}
+  <span class="cur">{{ pg.page }} / {{ pg.pages }}</span>
+  {% if pg.page < pg.pages %}<a href="{{ base }}page={{ pg.page + 1 }}">下一页</a>{% endif %}
+  <span class="muted">共 {{ pg.total }} 条</span>
+</div>
+{% endif %}

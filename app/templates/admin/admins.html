@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}管理员 · {{ site.site_name }}{% endblock %}
+{% block crumb %}管理员{% endblock %}
+{% block content %}
+<div class="page-head"><h1>管理员</h1></div>
+
+<div class="two-col">
+  <div class="panel">
+    <h3>新增管理员</h3>
+    <form method="post" action="/admin/admins/create">
+      <label>用户名 <span class="req">*</span><input name="username" required></label>
+      <label>密码 <span class="req">*</span><input name="password" type="text" required></label>
+      <label>角色
+        <select name="role">
+          <option value="operator">operator(操作员)</option>
+          <option value="super">super(超级管理员)</option>
+        </select>
+      </label>
+      <button class="btn primary" type="submit">创建</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>管理员列表</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>最近登录</th><th></th></tr></thead>
+        <tbody>
+        {% for a in admins %}
+          <tr>
+            <td>{{ a.username }}{% if a.id == current_admin.id %} <span class="muted">(你)</span>{% endif %}</td>
+            <td>{{ a.role }}</td>
+            <td>{% if a.is_active %}<span class="badge ok">启用</span>{% else %}<span class="badge muted">停用</span>{% endif %}</td>
+            <td class="muted">{{ a.last_login_at|dt }}</td>
+            <td class="right">
+              <details>
+                <summary class="btn sm">重置密码</summary>
+                <form method="post" action="/admin/admins/{{ a.id }}/reset-pwd" style="margin-top:8px">
+                  <label>新密码<input name="password" type="text" required></label>
+                  <button class="btn primary sm" type="submit">确定</button>
+                </form>
+              </details>
+              {% if a.id != current_admin.id %}
+              <form class="inline-form" method="post" action="/admin/admins/{{ a.id }}/toggle"><button class="btn sm">{{ '停用' if a.is_active else '启用' }}</button></form>
+              <form class="inline-form" method="post" action="/admin/admins/{{ a.id }}/delete" onsubmit="return confirm('删除管理员 {{ a.username }}?')"><button class="btn sm danger">删除</button></form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}设备管理 · {{ site.site_name }}{% endblock %}
+{% block crumb %}设备管理{% endblock %}
+{% block content %}
+<div class="page-head"><h1>设备管理</h1></div>
+
+<form class="filters" method="get" action="/admin/devices">
+  <label>状态
+    <select name="status">
+      <option value="">全部</option>
+      <option value="active" {{ 'selected' if f.status == 'active' else '' }}>在绑</option>
+      <option value="unbound" {{ 'selected' if f.status == 'unbound' else '' }}>已解绑</option>
+    </select>
+  </label>
+  <label>关键字<input name="q" value="{{ f.q }}" placeholder="机器码 / 卡密"></label>
+  <button class="btn" type="submit">筛选</button>
+</form>
+
+<div class="panel">
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>机器码</th><th>名称</th><th>所属卡密</th><th>IP</th><th>状态</th><th>绑定时间</th><th>最近活跃</th><th></th></tr></thead>
+      <tbody>
+      {% for d in devices %}
+        <tr>
+          <td class="mono">{{ d.device_id }}</td>
+          <td>{{ d.device_name or '-' }}</td>
+          <td>{% if d.card %}<a href="/admin/cards/{{ d.card.id }}" class="mono">{{ d.card.code }}</a>{% else %}-{% endif %}</td>
+          <td class="muted">{{ d.ip or '-' }}</td>
+          <td><span class="badge {{ d.status|status_class }}">{{ d.status|status_label }}</span></td>
+          <td class="muted">{{ d.bound_at|dt }}</td>
+          <td class="muted">{{ d.last_active_at|dt }}</td>
+          <td class="right">
+            <details>
+              <summary class="btn sm">编辑</summary>
+              <form method="post" action="/admin/devices/{{ d.id }}/edit" style="margin-top:8px; min-width:220px">
+                <input type="hidden" name="back" value="/admin/devices?status={{ f.status }}&q={{ f.q }}">
+                <label>名称<input name="device_name" value="{{ d.device_name }}"></label>
+                <label>换绑机器码<input name="new_device_id" class="mono" placeholder="留空不改"></label>
+                <label>备注<input name="remark" value="{{ d.remark }}"></label>
+                <button class="btn primary sm" type="submit">保存</button>
+              </form>
+            </details>
+            {% if d.status == 'active' %}
+            <form class="inline-form" method="post" action="/admin/devices/{{ d.id }}/unbind">
+              <input type="hidden" name="back" value="/admin/devices?status={{ f.status }}&q={{ f.q }}">
+              <button class="btn sm" type="submit">解绑</button>
+            </form>
+            {% else %}
+            <form class="inline-form" method="post" action="/admin/devices/{{ d.id }}/delete" onsubmit="return confirm('删除该设备记录?')">
+              <input type="hidden" name="back" value="/admin/devices?status={{ f.status }}&q={{ f.q }}">
+              <button class="btn sm danger" type="submit">删除</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">没有匹配的设备</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "admin/_pagination.html" %}
+</div>
+{% endblock %}

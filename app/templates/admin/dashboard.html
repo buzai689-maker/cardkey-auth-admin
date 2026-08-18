@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}仪表盘 · {{ site.site_name }}{% endblock %}
+{% block crumb %}仪表盘{% endblock %}
+{% block content %}
+<div class="grid stat-grid">
+  <div class="stat"><div class="n">{{ stats.total }}</div><div class="l">卡密总数</div></div>
+  <div class="stat"><div class="n">{{ stats.unused }}</div><div class="l">未使用</div></div>
+  <div class="stat"><div class="n">{{ stats.active }}</div><div class="l">已激活</div></div>
+  <div class="stat"><div class="n">{{ stats.banned }}</div><div class="l">已封禁</div></div>
+  <div class="stat"><div class="n">{{ stats.devices }}</div><div class="l">在绑设备</div></div>
+  <div class="stat"><div class="n">{{ stats.today_activate }}</div><div class="l">今日激活</div></div>
+</div>
+
+<div class="two-col" style="margin-top:18px">
+  <div class="panel">
+    <h3>最近生成的卡密</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>卡密</th><th>类型</th><th>状态</th></tr></thead>
+        <tbody>
+        {% for c in recent_cards %}
+          <tr>
+            <td><a href="/admin/cards/{{ c.id }}" class="mono">{{ c.code }}</a></td>
+            <td>{{ c.type.name if c.type else '-' }}</td>
+            <td><span class="badge {{ c.effective_status|status_class }}">{{ c.effective_status|status_label }}</span></td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="muted">暂无数据,先去<a href="/admin/cards/generate">生成卡密</a></td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>最近验证记录</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>动作</th><th>卡密</th><th>设备</th><th>结果</th></tr></thead>
+        <tbody>
+        {% for l in recent_logs %}
+          <tr>
+            <td class="muted">{{ l.created_at|dt('%m-%d %H:%M:%S') }}</td>
+            <td>{{ l.action }}</td>
+            <td class="mono">{{ l.code }}</td>
+            <td class="mono muted">{{ l.device_id[:16] }}{% if l.device_id|length > 16 %}…{% endif %}</td>
+            <td>{% if l.success %}<span class="badge ok">成功</span>{% else %}<span class="badge danger">失败</span>{% endif %}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">暂无验证记录</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

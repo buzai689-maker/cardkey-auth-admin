@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}卡密详情 · {{ site.site_name }}{% endblock %}
+{% block crumb %}<a href="/admin/cards">卡密管理</a> / 详情{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="mono">{{ card.code }}</h1>
+  <div class="btn-row">
+    {% if card.status == 'banned' %}
+      <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/unban"><button class="btn">解封</button></form>
+    {% else %}
+      <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/ban"><button class="btn">封禁</button></form>
+    {% endif %}
+    <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/reset"
+          onsubmit="return confirm('重置将解绑全部设备并回到未使用状态,确认?')"><button class="btn">重置</button></form>
+    <form class="inline-form" method="post" action="/admin/cards/{{ card.id }}/delete"
+          onsubmit="return confirm('删除后不可恢复,确认?')"><button class="btn danger">删除</button></form>
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="panel">
+    <h3>基本信息</h3>
+    <div class="kv">
+      <div class="k">状态</div><div><span class="badge {{ card.effective_status|status_class }}">{{ card.effective_status|status_label }}</span></div>
+      <div class="k">类型</div><div>{{ card.type.name if card.type else '-' }} · {{ card.type.duration_label if card.type else '' }}</div>
+      <div class="k">设备</div><div>{{ card.bound_count }} / {{ card.max_devices }}</div>
+      {% if card.type and card.type.kind == 'count' %}
+      <div class="k">剩余点数</div><div>{{ card.remaining_count }}</div>
+      {% endif %}
+      <div class="k">激活时间</div><div class="muted">{{ card.activated_at|dt }}</div>
+      <div class="k">到期时间</div><div class="muted">{{ card.expires_at|dt if card.expires_at else ('永久' if card.type and card.type.is_permanent else '-') }}</div>
+      <div class="k">批次</div><div class="mono muted">{{ card.batch_no }}</div>
+      <div class="k">创建者</div><div class="muted">{{ card.created_by }}</div>
+      <div class="k">创建时间</div><div class="muted">{{ card.created_at|dt }}</div>
+    </div>
+
+    <h3 style="margin-top:20px">编辑</h3>
+    <form method="post" action="/admin/cards/{{ card.id }}/edit">
+      <label>可绑定设备数
+        <input name="max_devices" type="number" value="{{ card.max_devices }}" min="1" max="99">
+      </label>
+      <label>到期调整 (分钟,正数延长/负数缩短,0 不变)
+        <input name="extend_minutes" type="number" value="0">
+      </label>
+      <label>备注
+        <input name="remark" value="{{ card.remark }}">
+      </label>
+      <button class="btn primary" type="submit">保存</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h3>绑定设备 ({{ devices | selectattr('status','equalto','active') | list | length }} 在绑 / {{ devices|length }} 历史)</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>机器码</th><th>名称</th><th>IP</th><th>状态</th><th>绑定时间</th><th>最近活跃</th><th></th></tr></thead>
+        <tbody>
+        {% for d in devices %}
+          <tr>
+            <td class="mono">{{ d.device_id }}</td>
+            <td>{{ d.device_name or '-' }}</td>
+            <td class="muted">{{ d.ip or '-' }}</td>
+            <td><span class="badge {{ d.status|status_class }}">{{ d.status|status_label }}</span></td>
+            <td class="muted">{{ d.bound_at|dt }}</td>
+            <td class="muted">{{ d.last_active_at|dt }}</td>
+            <td class="right">
+              <details>
+                <summary class="btn sm">编辑</summary>
+                <form method="post" action="/admin/devices/{{ d.id }}/edit" style="margin-top:8px; min-width:220px">
+                  <input type="hidden" name="back" value="/admin/cards/{{ card.id }}">
+                  <label>名称<input name="device_name" value="{{ d.device_name }}"></label>
+                  <label>换绑机器码<input name="new_device_id" class="mono" placeholder="留空不改" value=""></label>
+                  <label>备注<input name="remark" value="{{ d.remark }}"></label>
+                  <div class="btn-row">
+                    <button class="btn primary sm" type="submit">保存</button>
+                  </div>
+                </form>
+              </details>
+              {% if d.status == 'active' %}
+              <form class="inline-form" method="post" action="/admin/devices/{{ d.id }}/unbind">
+                <input type="hidden" name="back" value="/admin/cards/{{ card.id }}">
+                <button class="btn sm" type="submit">解绑</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">尚无设备绑定</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

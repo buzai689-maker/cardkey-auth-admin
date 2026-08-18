@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}日志 · {{ site.site_name }}{% endblock %}
+{% block crumb %}日志{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>日志</h1>
+  <div class="btn-row">
+    <a class="btn {{ 'primary' if tab == 'auth' else '' }}" href="/admin/logs?tab=auth">验证日志</a>
+    <a class="btn {{ 'primary' if tab == 'audit' else '' }}" href="/admin/logs?tab=audit">后台操作</a>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="table-wrap">
+    {% if tab == 'auth' %}
+    <table>
+      <thead><tr><th>时间</th><th>动作</th><th>卡密</th><th>机器码</th><th>结果</th><th>信息</th><th>IP</th></tr></thead>
+      <tbody>
+      {% for l in items %}
+        <tr>
+          <td class="muted">{{ l.created_at|dt }}</td>
+          <td>{{ l.action }}</td>
+          <td class="mono">{{ l.code }}</td>
+          <td class="mono muted">{{ l.device_id }}</td>
+          <td>{% if l.success %}<span class="badge ok">成功</span>{% else %}<span class="badge danger">失败</span>{% endif %}</td>
+          <td class="muted">{{ l.message }}</td>
+          <td class="muted">{{ l.ip }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="muted">暂无记录</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <table>
+      <thead><tr><th>时间</th><th>管理员</th><th>动作</th><th>对象</th><th>详情</th><th>IP</th></tr></thead>
+      <tbody>
+      {% for l in items %}
+        <tr>
+          <td class="muted">{{ l.created_at|dt }}</td>
+          <td>{{ l.admin_name }}</td>
+          <td>{{ l.action }}</td>
+          <td class="mono muted">{{ l.target }}</td>
+          <td class="muted">{{ l.detail }}</td>
+          <td class="muted">{{ l.ip }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted">暂无记录</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% include "admin/_pagination.html" %}
+</div>
+{% endblock %}
