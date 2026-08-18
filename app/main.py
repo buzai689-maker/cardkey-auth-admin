@@ -9,7 +9,7 @@ from .config import BASE_DIR, settings
 from .database import SessionLocal, init_db
 from .deps import AuthRequired
 from .models import Admin
-from .routers import api, auth, cards, cardtypes, dashboard, devices, logs, system
+from .routers import api, auth, cards, dashboard, devices, logs, system
 from .security import hash_password
 from .services import settings as settings_svc
 
@@ -62,7 +62,7 @@ async def _auth_required_handler(request: Request, exc: AuthRequired):
     return RedirectResponse("/admin/login", status_code=303)
 
 
-for r in (auth, dashboard, cardtypes, cards, devices, logs, system, api):
+for r in (auth, dashboard, cards, devices, logs, system, api):
     app.include_router(r.router)
 
 

@@ -14,7 +14,6 @@
       <a href="/admin" class="{{ 'active' if active == 'dashboard' else '' }}">仪表盘</a>
       <a href="/admin/cards" class="{{ 'active' if active == 'cards' else '' }}">卡密管理</a>
       <a href="/admin/cards/generate" class="{{ 'active' if active == 'generate' else '' }}">生成卡密</a>
-      <a href="/admin/card-types" class="{{ 'active' if active == 'cardtypes' else '' }}">卡类型</a>
       <a href="/admin/devices" class="{{ 'active' if active == 'devices' else '' }}">设备管理</a>
       <a href="/admin/logs" class="{{ 'active' if active == 'logs' else '' }}">日志</a>
       {% if current_admin and current_admin.role == 'super' %}

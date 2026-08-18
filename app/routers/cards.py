@@ -69,7 +69,7 @@ def generate_do(
     count: int = Form(...),
     prefix: str = Form(""),
     length: int = Form(16),
-    group_size: int = Form(0),
+    group_size: int = Form(4),
     remark: str = Form(""),
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
