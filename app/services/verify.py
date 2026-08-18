@@ -60,14 +60,15 @@ def activate(db, request, code: str, device_id: str, device_name: str = ""):
             _log(db, request, code, device_id, "activate", False, "device limit")
             return False, "设备数已达上限", None
         dev = Device(
-            card_id=card.id,
             device_id=device_id,
             device_name=device_name,
             ip=client_ip(request),
             status="active",
             last_active_at=datetime.now(),
         )
-        db.add(dev)
+        # append to the relationship (not bare db.add) so card.bound_count is
+        # fresh in the same request that returns the newly bound device.
+        card.devices.append(dev)
     else:
         dev.last_active_at = datetime.now()
         if device_name:

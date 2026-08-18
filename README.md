@@ -61,6 +61,42 @@ curl -X POST http://127.0.0.1:8000/api/v1/unbind \
 
 `data` 字段:`status` / `type` / `activated_at` / `expires_at` / `max_devices` / `bound_devices` / `remaining_count`。
 
+## 软件加密(客户端保护 / 网络验证)
+
+只做布尔校验(`if success: run`)一条 `je→jmp` 就爆破了。真正的强度来自**把密钥放服务器、用授权门控**:软件核心加密分发,验证通过才下发解密密钥。
+
+协议在应用层完成密钥交换 + 服务器签名,不依赖 TLS(授权用户能拦自己的 TLS),抗中间人:
+
+```
+GET  /api/v1/pubkey    -> 服务器 Ed25519 公钥(嵌进客户端做 pinning)
+POST /api/v1/session   {code, device_id, client_pub(X25519,b64), nonce(b64)}
+     校验卡 + 绑定设备后返回 {success, body, sig}:
+       sig  = Ed25519(server_priv, frame(AAD, client_pub, nonce, body))
+       body = {server_pub, server_nonce, gcm_nonce, wrapped_key, card, ts, client_nonce}
+       wrapped_key = AES-GCM(session_key, K_payload)
+       session_key = HKDF(ECDH(server_eph, client_pub), salt=client_nonce+server_nonce)
+```
+
+客户端:验签(pinned pub)→ 校验 nonce/ts → ECDH 出 session_key → 解出 `K_payload` → 解密随程序分发的 `core.enc` → 内存加载运行。patch 掉校验分支没用——二进制里没有密钥,签名/ECDH 也伪造不了。
+
+### 工作流
+
+```bash
+# 1. 看服务器公钥 + K_payload 指纹(公钥 pin 进客户端)
+python -m tools.protect keyinfo
+
+# 2. 把软件核心加密成 .enc,随程序分发
+python -m tools.protect encrypt examples/core_plain.py examples/core.enc
+
+# 3. 参考客户端:取机器码 -> 握手授权 -> 解出密钥 -> 解密执行 core.enc
+python -m examples.client --code DEMO-XXXX-XXXX-XXXX
+```
+
+- 服务器密钥在首启生成于 `data/keys/`(`ed25519_priv.key` 签名钥、`payload.key` 即 K_payload),**已 gitignore,不入库**。
+- 参考客户端是 Python,协议语言无关——真实 C/C++/C#/Delphi 客户端照上面 wire format 重写 2–6 步即可,机器码指纹按目标平台采集(Windows 用 MachineGuid+CPU+MAC)。
+- 加壳(VMProtect/Themida)、反调试、反 dump 是**第二层**加固,叠在这套门控之上;单独用它们而不做密钥门控仍可爆破。
+- 诚实的边界:被授权用户在自己机器上能 dump 出解密后的核心——这是任何客户端解密方案的固有上限。要更强,把最关键逻辑放服务器端执行(客户端拿不到就破不了)。
+
 ## 卡密状态机
 
 ```
@@ -78,18 +114,21 @@ reset: 解绑全部设备 + 回到 unused
 
 ```
 app/
-  main.py            应用装配 + lifespan(建表 / bootstrap admin)
+  main.py            应用装配 + lifespan(建表 / bootstrap admin / 生成密钥)
   config.py          配置(env 覆盖)
   database.py        engine / session / Base
   security.py        pbkdf2 口令散列 + 随机码生成
+  crypto.py          Ed25519 签名 / X25519 ECDH / AES-GCM / HKDF(客户端保护)
   deps.py            会话鉴权依赖(current_admin / require_super)
   templating.py      Jinja2 + 过滤器 + flash
   models/            Admin / CardType / Card / Device / AuthLog / AuditLog / Setting
   services/          cards / devices / verify / settings / audit
-  routers/           auth / dashboard / cardtypes / cards / devices / logs / system / api
+  routers/           auth / dashboard / cards / devices / logs / system / api
   templates/  static/
+tools/protect.py     用 K_payload 加/解密软件核心(build 期)
+examples/client.py   参考客户端(机器码 -> 握手 -> 解密执行 core.enc)
 scripts/seed.py      演示数据
-tests/test_flow.py   API + 登录流程测试
+tests/               test_flow(API+登录) / test_crypto(握手+载荷)
 ```
 
 ```bash

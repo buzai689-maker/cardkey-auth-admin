@@ -40,6 +40,9 @@ async def lifespan(app: FastAPI):
     init_db()
     bootstrap_admin()
     settings_svc.refresh_cache()
+    from . import crypto
+
+    crypto.ensure_keys()
     yield
 
 
