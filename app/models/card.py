@@ -51,6 +51,10 @@ class Card(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     type_id: Mapped[int] = mapped_column(ForeignKey("card_types.id"))
+    # which software this card belongs to (nullable for legacy single-app cards)
+    application_id: Mapped[int | None] = mapped_column(
+        ForeignKey("applications.id"), nullable=True, index=True
+    )
     # stored status: unused | active | banned  (expired/used_up are derived)
     status: Mapped[str] = mapped_column(String(16), default="unused", index=True)
     max_devices: Mapped[int] = mapped_column(Integer, default=1)
@@ -63,6 +67,7 @@ class Card(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     type: Mapped["CardType"] = relationship(back_populates="cards")
+    application: Mapped["Application | None"] = relationship(back_populates="cards")
     devices: Mapped[list["Device"]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
     )

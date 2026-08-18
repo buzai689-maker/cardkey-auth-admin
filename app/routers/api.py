@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from .. import crypto
 from ..database import get_db
+from ..services import applications as app_svc
 from ..services import verify as verify_svc
 
 router = APIRouter(prefix="/api/v1", tags=["client-api"])
@@ -28,11 +29,13 @@ class SessionIn(BaseModel):
     client_pub: str  # base64 raw X25519 public key
     nonce: str  # base64 client nonce
     device_name: str | None = ""
+    app_key: str | None = ""  # optional: cross-check the card belongs to this app
 
 
 def _card_payload(card):
     return {
         "status": card.effective_status,
+        "app": card.application.app_key if card.application else None,
         "type": card.type.name if card.type else None,
         "activated_at": card.activated_at.isoformat() if card.activated_at else None,
         "expires_at": card.expires_at.isoformat() if card.expires_at else None,
@@ -92,9 +95,20 @@ def api_session(request: Request, body: SessionIn, db: Session = Depends(get_db)
     )
     if not ok or card is None:
         return {"success": False, "message": msg}
+
+    # resolve which app's K_payload to deliver (per-app isolation)
+    key = None
+    if card.application_id:
+        app = card.application
+        if not app or not app.is_active:
+            return {"success": False, "message": "应用未启用"}
+        if body.app_key and body.app_key != app.app_key:
+            return {"success": False, "message": "卡与应用不匹配"}
+        key = app_svc.payload_key_bytes(app)
+
     try:
         session = crypto.build_session_response(
-            body.client_pub, body.nonce, _card_payload(card), int(time.time())
+            body.client_pub, body.nonce, _card_payload(card), int(time.time()), key
         )
     except Exception:
         return {"success": False, "message": "握手参数无效"}

@@ -79,17 +79,26 @@ POST /api/v1/session   {code, device_id, client_pub(X25519,b64), nonce(b64)}
 
 客户端:验签(pinned pub)→ 校验 nonce/ts → ECDH 出 session_key → 解出 `K_payload` → 解密随程序分发的 `core.enc` → 内存加载运行。patch 掉校验分支没用——二进制里没有密钥,签名/ECDH 也伪造不了。
 
+### 多应用隔离(一套后台管多个软件)
+
+后台可管理多个 `Application`,每个软件独立卡池 + 独立 `K_payload`。卡属于哪个应用,`/session` 就下发哪个应用的密钥——**A 软件的卡解不开 B 软件的核心**(实测:换应用的卡去解另一应用的 `core.enc` 得到 `InvalidTag`)。
+
+- 「应用」页创建软件,拿到它的 `app_key`;生成卡密时选所属应用。
+- 服务器 Ed25519 签名公钥**全局共用**一把(客户端 pin 它);隔离体现在 per-app 的 `K_payload` 与卡归属。
+- 轮换某应用的 `K_payload` 后,该应用的核心需重新加密分发(其它应用不受影响)。
+
 ### 工作流
 
 ```bash
-# 1. 看服务器公钥 + K_payload 指纹(公钥 pin 进客户端)
-python -m tools.protect keyinfo
+# 1. 列出应用 / 看某应用的 K_payload 指纹 + 服务器公钥(公钥 pin 进客户端)
+python -m tools.protect list-apps
+python -m tools.protect keyinfo --app <app_key>
 
-# 2. 把软件核心加密成 .enc,随程序分发
-python -m tools.protect encrypt examples/core_plain.py examples/core.enc
+# 2. 用该应用的密钥把软件核心加密成 .enc,随程序分发
+python -m tools.protect encrypt --app <app_key> examples/core_plain.py examples/core.enc
 
 # 3. 参考客户端:取机器码 -> 握手授权 -> 解出密钥 -> 解密执行 core.enc
-python -m examples.client --code DEMO-XXXX-XXXX-XXXX
+python -m examples.client --code <该应用的卡密>
 ```
 
 - 服务器密钥在首启生成于 `data/keys/`(`ed25519_priv.key` 签名钥、`payload.key` 即 K_payload),**已 gitignore,不入库**。
@@ -121,9 +130,9 @@ app/
   crypto.py          Ed25519 签名 / X25519 ECDH / AES-GCM / HKDF(客户端保护)
   deps.py            会话鉴权依赖(current_admin / require_super)
   templating.py      Jinja2 + 过滤器 + flash
-  models/            Admin / CardType / Card / Device / AuthLog / AuditLog / Setting
-  services/          cards / devices / verify / settings / audit
-  routers/           auth / dashboard / cards / devices / logs / system / api
+  models/            Admin / Application / CardType / Card / Device / AuthLog / AuditLog / Setting
+  services/          applications / cards / devices / verify / settings / audit
+  routers/           auth / dashboard / applications / cards / devices / logs / system / api
   templates/  static/
 tools/protect.py     用 K_payload 加/解密软件核心(build 期)
 examples/client.py   参考客户端(机器码 -> 握手 -> 解密执行 core.enc)

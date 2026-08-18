@@ -5,8 +5,17 @@
 <div class="page-head"><h1>生成卡密</h1></div>
 
 <div class="panel" style="max-width:600px">
+  {% if apps %}
   <form method="post" action="/admin/cards/generate">
-    <div class="btn-row" style="margin-bottom:14px">
+    <label>所属应用 <span class="req">*</span>
+      <select name="application_id" required>
+        {% for a in apps %}
+        <option value="{{ a.id }}">{{ a.name }} ({{ a.app_key }})</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <div class="btn-row" style="margin:6px 0 14px">
       {% for d, l in [(1,'日卡'),(7,'周卡'),(30,'月卡'),(90,'季卡'),(365,'年卡')] %}
       <button type="button" class="btn sm" onclick="setDays({{ d }})">{{ l }} ({{ d }}天)</button>
       {% endfor %}
@@ -36,10 +45,12 @@
   </form>
 
   <p class="muted" style="margin-top:14px">
-    按「授权天数 + 授权设备数」直接生成:每张卡首次激活时开始计时,最多可绑定所填数量的设备。
-    卡号为随机唯一码(去易混字符,形如 <code class="mono">A7C4-9K2M-7Q3D-5W8H</code>)。
-    生成后可在卡密列表按批次筛选并导出 txt。
+    卡归属所选应用,只能解锁该应用的核心。卡号为随机唯一码(去易混字符,形如
+    <code class="mono">A7C4-9K2M-7Q3D-5W8H</code>)。生成后可在卡密列表按批次筛选并导出 txt。
   </p>
+  {% else %}
+  <p class="muted">还没有应用,请先到 <a href="/admin/applications">应用</a> 创建一个要保护的软件,再来生成卡密。</p>
+  {% endif %}
 </div>
 
 <script>

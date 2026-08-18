@@ -121,8 +121,14 @@ def payload_key() -> bytes:
 # server: build a signed session response that delivers K_payload              #
 # --------------------------------------------------------------------------- #
 def build_session_response(
-    client_pub_b64: str, client_nonce_b64: str, card_data: dict, ts: int
+    client_pub_b64: str,
+    client_nonce_b64: str,
+    card_data: dict,
+    ts: int,
+    key: bytes | None = None,
 ) -> dict:
+    """`key` is the per-application K_payload to deliver; falls back to the
+    global payload key for legacy single-app cards."""
     client_pub_raw = b64d(client_pub_b64)
     client_pub = X25519PublicKey.from_public_bytes(client_pub_raw)
 
@@ -133,8 +139,9 @@ def build_session_response(
     sn = os.urandom(16)
     session_key = _hkdf(shared, salt=cn + sn)
 
+    k_payload = key if key is not None else payload_key()
     gcm_nonce = os.urandom(12)
-    wrapped = AESGCM(session_key).encrypt(gcm_nonce, payload_key(), SESSION_AAD)
+    wrapped = AESGCM(session_key).encrypt(gcm_nonce, k_payload, SESSION_AAD)
 
     body_obj = {
         "v": 1,

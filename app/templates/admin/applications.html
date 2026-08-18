@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}应用 · {{ site.site_name }}{% endblock %}
+{% block crumb %}应用{% endblock %}
+{% block content %}
+<div class="page-head"><h1>应用(软件)</h1></div>
+
+<div class="two-col">
+  <div class="panel">
+    <h3>新建应用</h3>
+    <form method="post" action="/admin/applications/create">
+      <label>软件名称 <span class="req">*</span><input name="name" placeholder="如 我的外挂 / MyTool" required></label>
+      <label>备注<input name="remark" placeholder="可选"></label>
+      <button class="btn primary" type="submit">创建</button>
+    </form>
+    <p class="muted" style="margin-top:12px">
+      每个应用独立卡池 + 独立 <code>K_payload</code>。创建后用它的 <code>app_key</code> 生成卡密、
+      用 <code>tools/protect.py --app &lt;app_key&gt;</code> 加密该软件的核心。
+    </p>
+  </div>
+
+  <div class="panel">
+    <h3>已有应用</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>名称</th><th>app_key</th><th>K_payload 指纹</th><th>卡数</th><th>状态</th><th></th></tr></thead>
+        <tbody>
+        {% for a in apps %}
+          <tr>
+            <td>{{ a.name }}</td>
+            <td class="mono">{{ a.app_key }}</td>
+            <td class="mono muted">{{ fps.get(a.id, '') }}</td>
+            <td><a href="/admin/cards?application_id={{ a.id }}">{{ counts.get(a.id, 0) }}</a></td>
+            <td>{% if a.is_active %}<span class="badge ok">启用</span>{% else %}<span class="badge muted">停用</span>{% endif %}</td>
+            <td class="right">
+              <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/toggle"><button class="btn sm">{{ '停用' if a.is_active else '启用' }}</button></form>
+              <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/rotate-key"
+                    onsubmit="return confirm('轮换 K_payload 会使已加密分发的核心失效,需重新加密。确认?')"><button class="btn sm">轮换密钥</button></form>
+              <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/delete"
+                    onsubmit="return confirm('删除应用 {{ a.name }}?')"><button class="btn sm danger">删除</button></form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">还没有应用,先在左侧创建一个</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="panel" style="max-width:760px">
+  <h3>客户端接入</h3>
+  <p class="muted">所有应用共用同一把服务器签名公钥(客户端 pin 这个值验签):</p>
+  <div class="mono" style="word-break:break-all; background:var(--panel-2); padding:10px; border-radius:8px">{{ server_pubkey }}</div>
+  <p class="muted" style="margin-top:10px">
+    客户端调用 <code>POST /api/v1/session</code> 时带上该应用的卡密即可;卡属于哪个应用,
+    服务器就下发哪个应用的 <code>K_payload</code>。可选传 <code>app_key</code> 做交叉校验(卡与应用不匹配则拒绝)。
+  </p>
+</div>
+{% endblock %}

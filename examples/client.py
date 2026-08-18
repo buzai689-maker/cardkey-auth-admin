@@ -77,7 +77,7 @@ def _get(url: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def run(code: str, server: str, core_path: str) -> int:
+def run(code: str, server: str, core_path: str, app_key: str = "") -> int:
     server = server.rstrip("/")
     device_id = machine_code()
     print(f"[*] device_id = {device_id}")
@@ -90,10 +90,15 @@ def run(code: str, server: str, core_path: str) -> int:
     ).decode()
     nonce_b64 = base64.b64encode(os.urandom(16)).decode()
 
-    resp = _post(
-        f"{server}/api/v1/session",
-        {"code": code, "device_id": device_id, "client_pub": client_pub_b64, "nonce": nonce_b64},
-    )
+    req = {
+        "code": code,
+        "device_id": device_id,
+        "client_pub": client_pub_b64,
+        "nonce": nonce_b64,
+    }
+    if app_key:
+        req["app_key"] = app_key  # optional: server rejects if card belongs elsewhere
+    resp = _post(f"{server}/api/v1/session", req)
     if not resp.get("success"):
         print(f"[!] authorization failed: {resp.get('message')}")
         return 1
@@ -113,7 +118,12 @@ def run(code: str, server: str, core_path: str) -> int:
         print(f"[i] no protected core at {core_path}; run tools/protect.py to make one.")
         return 0
     blob = open(core_path, "rb").read()
-    core = crypto.decrypt_payload(blob, k_payload)
+    try:
+        core = crypto.decrypt_payload(blob, k_payload)
+    except Exception:
+        # wrong K_payload — e.g. this card belongs to a different application
+        print("[!] core decryption failed — card does not match this software.")
+        return 1
     print(f"[+] core.enc decrypted in memory ({len(core)} bytes), executing:\n")
     exec(compile(core, core_path, "exec"), {"__name__": "__protected__"})
     return 0
@@ -124,5 +134,6 @@ if __name__ == "__main__":
     ap.add_argument("--code", required=True, help="card key")
     ap.add_argument("--server", default="http://127.0.0.1:8000")
     ap.add_argument("--core", default="examples/core.enc")
+    ap.add_argument("--app", default="", help="optional app_key cross-check")
     args = ap.parse_args()
-    raise SystemExit(run(args.code, args.server, args.core))
+    raise SystemExit(run(args.code, args.server, args.core, args.app))

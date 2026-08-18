@@ -12,6 +12,7 @@ def generate_cards(
     db,
     card_type: CardType,
     count: int,
+    application_id: int | None = None,
     prefix: str = "",
     length: int = 16,
     group_size: int = 0,
@@ -35,6 +36,7 @@ def generate_cards(
         card = Card(
             code=code,
             type_id=card_type.id,
+            application_id=application_id,
             status="unused",
             max_devices=card_type.max_devices,
             remaining_count=card_type.total_count if card_type.kind == "count" else 0,

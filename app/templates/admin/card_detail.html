@@ -26,6 +26,7 @@
     <h3>基本信息</h3>
     <div class="kv">
       <div class="k">状态</div><div><span class="badge {{ card.effective_status|status_class }}">{{ card.effective_status|status_label }}</span></div>
+      <div class="k">应用</div><div>{% if card.application %}{{ card.application.name }} <span class="mono muted">({{ card.application.app_key }})</span>{% else %}<span class="muted">未归属(旧卡)</span>{% endif %}</div>
       <div class="k">类型</div><div>{{ card.type.name if card.type else '-' }} · {{ card.type.duration_label if card.type else '' }}</div>
       <div class="k">设备</div><div>{{ card.bound_count }} / {{ card.max_devices }}</div>
       {% if card.type and card.type.kind == 'count' %}

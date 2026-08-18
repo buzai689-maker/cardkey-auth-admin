@@ -43,3 +43,14 @@ def init_db():
     from . import models  # noqa: F401  (register mappers)
 
     Base.metadata.create_all(engine)
+    _sqlite_migrate()
+
+
+def _sqlite_migrate():
+    """Additive column migrations for existing SQLite files (no Alembic)."""
+    if not _is_sqlite:
+        return
+    with engine.begin() as conn:
+        cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(cards)").fetchall()}
+        if "application_id" not in cols:
+            conn.exec_driver_sql("ALTER TABLE cards ADD COLUMN application_id INTEGER")

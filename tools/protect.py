@@ -1,59 +1,103 @@
-"""Encrypt/decrypt a protected payload with the server's K_payload.
+"""Encrypt/decrypt a software's protected core with that app's K_payload.
 
-Build-time you encrypt the software's valuable core (a DLL, script, or resource)
-and ship the .enc alongside the app. The plaintext key never leaves the server;
-the client obtains it only via a valid /api/v1/session handshake.
+Each application has its own key, so you pick the app by its app_key:
 
-    python -m tools.protect encrypt examples/core_plain.py examples/core.enc
-    python -m tools.protect decrypt examples/core.enc /tmp/core.py      # sanity check
-    python -m tools.protect keyinfo
+    python -m tools.protect list-apps
+    python -m tools.protect encrypt --app myapp-ab12cd core.py core.enc
+    python -m tools.protect decrypt --app myapp-ab12cd core.enc /tmp/core.py
+    python -m tools.protect keyinfo --app myapp-ab12cd
 """
+import argparse
 import hashlib
 import sys
 
 from app import crypto
+from app.database import SessionLocal, init_db
+from app.models import Application
+from app.services import applications as app_svc
 
 
-def _usage() -> int:
-    print(__doc__)
-    return 2
+def _resolve_key(app_key: str) -> bytes:
+    init_db()
+    db = SessionLocal()
+    try:
+        app = app_svc.get_by_key(db, app_key)
+        if not app:
+            avail = [f"{a.app_key}  ({a.name})" for a in db.query(Application).all()]
+            listing = "\n  ".join(avail) if avail else "(none — create one in 应用)"
+            raise SystemExit(f"app_key '{app_key}' not found. available:\n  {listing}")
+        return app_svc.payload_key_bytes(app)
+    finally:
+        db.close()
 
 
-def cmd_encrypt(src: str, dst: str) -> int:
-    data = open(src, "rb").read()
-    blob = crypto.encrypt_payload(data, crypto.payload_key())
-    open(dst, "wb").write(blob)
-    print(f"encrypted {len(data)} -> {len(blob)} bytes  {src} -> {dst}")
+def cmd_encrypt(args) -> int:
+    key = _resolve_key(args.app)
+    data = open(args.src, "rb").read()
+    blob = crypto.encrypt_payload(data, key)
+    open(args.dst, "wb").write(blob)
+    print(f"encrypted {len(data)} -> {len(blob)} bytes  [{args.app}]  {args.src} -> {args.dst}")
     return 0
 
 
-def cmd_decrypt(src: str, dst: str) -> int:
-    blob = open(src, "rb").read()
-    data = crypto.decrypt_payload(blob, crypto.payload_key())
-    open(dst, "wb").write(data)
-    print(f"decrypted {len(blob)} -> {len(data)} bytes  {src} -> {dst}")
+def cmd_decrypt(args) -> int:
+    key = _resolve_key(args.app)
+    blob = open(args.src, "rb").read()
+    data = crypto.decrypt_payload(blob, key)
+    open(args.dst, "wb").write(data)
+    print(f"decrypted {len(blob)} -> {len(data)} bytes  [{args.app}]  {args.src} -> {args.dst}")
     return 0
 
 
-def cmd_keyinfo() -> int:
-    k = crypto.payload_key()
-    print("K_payload sha256 :", hashlib.sha256(k).hexdigest())
+def cmd_keyinfo(args) -> int:
+    key = _resolve_key(args.app)
+    print("app_key          :", args.app)
+    print("K_payload sha256 :", hashlib.sha256(key).hexdigest())
     print("server pubkey    :", crypto.server_public_key_b64())
-    print("(embed the pubkey in the client for signature pinning)")
+    print("(embed the server pubkey in the client for signature pinning)")
+    return 0
+
+
+def cmd_listapps(_args) -> int:
+    init_db()
+    db = SessionLocal()
+    try:
+        apps = db.query(Application).order_by(Application.id).all()
+        if not apps:
+            print("(no applications — create one in the 应用 page)")
+        for a in apps:
+            state = "active" if a.is_active else "disabled"
+            print(f"{a.app_key:28} {state:9} cards={app_svc.card_count(db, a):<5} {a.name}")
+    finally:
+        db.close()
     return 0
 
 
 def main(argv) -> int:
-    if not argv:
-        return _usage()
-    cmd = argv[0]
-    if cmd == "encrypt" and len(argv) == 3:
-        return cmd_encrypt(argv[1], argv[2])
-    if cmd == "decrypt" and len(argv) == 3:
-        return cmd_decrypt(argv[1], argv[2])
-    if cmd == "keyinfo":
-        return cmd_keyinfo()
-    return _usage()
+    ap = argparse.ArgumentParser(prog="tools.protect")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("encrypt")
+    p.add_argument("--app", required=True)
+    p.add_argument("src")
+    p.add_argument("dst")
+    p.set_defaults(fn=cmd_encrypt)
+
+    p = sub.add_parser("decrypt")
+    p.add_argument("--app", required=True)
+    p.add_argument("src")
+    p.add_argument("dst")
+    p.set_defaults(fn=cmd_decrypt)
+
+    p = sub.add_parser("keyinfo")
+    p.add_argument("--app", required=True)
+    p.set_defaults(fn=cmd_keyinfo)
+
+    p = sub.add_parser("list-apps")
+    p.set_defaults(fn=cmd_listapps)
+
+    args = ap.parse_args(argv)
+    return args.fn(args)
 
 
 if __name__ == "__main__":

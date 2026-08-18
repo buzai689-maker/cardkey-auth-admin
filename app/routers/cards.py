@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..database import get_db
 from ..deps import get_current_admin
-from ..models import Admin, Card, CardType
+from ..models import Admin, Application, Card, CardType
 from ..services import cards as card_svc
 from ..services.audit import log_action
 from ..templating import flash, render
@@ -13,8 +13,10 @@ from ..utils import paginate, to_int
 router = APIRouter(prefix="/admin/cards")
 
 
-def _base_query(db, status, type_id, batch, q):
-    query = db.query(Card).options(joinedload(Card.type))
+def _base_query(db, status, type_id, batch, q, application_id=0):
+    query = db.query(Card).options(joinedload(Card.type), joinedload(Card.application))
+    if application_id:
+        query = query.filter(Card.application_id == application_id)
     if status:
         query = query.filter(Card.status == status)
     if type_id:
@@ -32,14 +34,16 @@ def list_cards(
     page: int = 1,
     status: str = "",
     type_id: int = 0,
+    application_id: int = 0,
     batch: str = "",
     q: str = "",
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, status, type_id, batch, q.strip())
+    query = _base_query(db, status, type_id, batch, q.strip(), application_id)
     items, pg = paginate(query, page, per_page=20)
     types = db.query(CardType).order_by(CardType.id.desc()).all()
+    apps = db.query(Application).order_by(Application.id.desc()).all()
     return render(
         request,
         "admin/cards.html",
@@ -47,7 +51,14 @@ def list_cards(
         cards=items,
         pg=pg,
         types=types,
-        f={"status": status, "type_id": type_id, "batch": batch, "q": q},
+        apps=apps,
+        f={
+            "status": status,
+            "type_id": type_id,
+            "application_id": application_id,
+            "batch": batch,
+            "q": q,
+        },
     )
 
 
@@ -57,12 +68,14 @@ def generate_form(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    return render(request, "admin/cards_generate.html", active="generate")
+    apps = db.query(Application).filter_by(is_active=True).order_by(Application.id.desc()).all()
+    return render(request, "admin/cards_generate.html", active="generate", apps=apps)
 
 
 @router.post("/generate")
 def generate_do(
     request: Request,
+    application_id: int = Form(...),
     days: int = Form(30),
     is_permanent: str = Form(""),
     max_devices: int = Form(1),
@@ -74,6 +87,11 @@ def generate_do(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
+    app = db.get(Application, to_int(application_id))
+    if not app:
+        flash(request, "请先选择所属应用", "danger")
+        return RedirectResponse("/admin/cards/generate", status_code=303)
+
     permanent = bool(is_permanent)
     days = max(0, to_int(days))
     max_devices = max(1, min(to_int(max_devices, 1), 99))
@@ -85,6 +103,7 @@ def generate_do(
         db,
         ct,
         count,
+        application_id=app.id,
         prefix=prefix.strip(),
         length=length,
         group_size=to_int(group_size),
@@ -92,7 +111,9 @@ def generate_do(
         remark=remark.strip(),
     )
     span = "永久" if permanent else f"{days}天"
-    log_action(db, request, "card.generate", batch, f"{span}/{max_devices}设备 x{len(created)}")
+    log_action(
+        db, request, "card.generate", batch, f"{app.name}/{span}/{max_devices}设备 x{len(created)}"
+    )
     flash(
         request,
         f"已生成 {len(created)} 张卡密 · {span} · 授权 {max_devices} 台 (批次 {batch})",
@@ -106,12 +127,13 @@ def export_cards(
     request: Request,
     status: str = "",
     type_id: int = 0,
+    application_id: int = 0,
     batch: str = "",
     q: str = "",
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, status, type_id, batch, q.strip())
+    query = _base_query(db, status, type_id, batch, q.strip(), application_id)
     codes = [c.code for c in query.limit(20000).all()]
     fname = f"cards_{batch or 'all'}.txt"
     return PlainTextResponse(
@@ -129,7 +151,11 @@ def card_detail(
 ):
     card = (
         db.query(Card)
-        .options(joinedload(Card.type), joinedload(Card.devices))
+        .options(
+            joinedload(Card.type),
+            joinedload(Card.application),
+            joinedload(Card.devices),
+        )
         .filter_by(id=card_id)
         .first()
     )

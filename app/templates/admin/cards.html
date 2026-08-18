@@ -5,12 +5,20 @@
 <div class="page-head">
   <h1>卡密管理</h1>
   <div class="btn-row">
-    <a class="btn" href="/admin/cards/export?status={{ f.status }}&type_id={{ f.type_id }}&batch={{ f.batch }}&q={{ f.q }}">导出当前筛选</a>
+    <a class="btn" href="/admin/cards/export?application_id={{ f.application_id }}&status={{ f.status }}&type_id={{ f.type_id }}&batch={{ f.batch }}&q={{ f.q }}">导出当前筛选</a>
     <a class="btn primary" href="/admin/cards/generate">＋ 生成卡密</a>
   </div>
 </div>
 
 <form class="filters" method="get" action="/admin/cards">
+  <label>应用
+    <select name="application_id">
+      <option value="0">全部</option>
+      {% for a in apps %}
+      <option value="{{ a.id }}" {{ 'selected' if f.application_id == a.id else '' }}>{{ a.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>状态
     <select name="status">
       <option value="">全部</option>
@@ -36,12 +44,13 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>卡密</th><th>类型</th><th>状态</th><th>设备</th><th>激活时间</th><th>到期时间</th><th>批次</th><th></th></tr>
+        <tr><th>卡密</th><th>应用</th><th>类型</th><th>状态</th><th>设备</th><th>激活时间</th><th>到期时间</th><th>批次</th><th></th></tr>
       </thead>
       <tbody>
       {% for c in cards %}
         <tr>
           <td><a href="/admin/cards/{{ c.id }}" class="mono">{{ c.code }}</a></td>
+          <td>{{ c.application.name if c.application else '-' }}</td>
           <td>{{ c.type.name if c.type else '-' }}</td>
           <td><span class="badge {{ c.effective_status|status_class }}">{{ c.effective_status|status_label }}</span></td>
           <td>{{ c.bound_count }} / {{ c.max_devices }}</td>
@@ -60,7 +69,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="8" class="muted">没有匹配的卡密</td></tr>
+        <tr><td colspan="9" class="muted">没有匹配的卡密</td></tr>
       {% endfor %}
       </tbody>
     </table>
