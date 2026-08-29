@@ -84,24 +84,29 @@ def activate(db, request, code: str, device_id: str, device_name: str = ""):
     return True, "激活成功", card
 
 
-def verify(db, request, code: str, device_id: str):
-    """Heartbeat / login check for an already-bound device."""
+def verify(db, request, code: str, device_id: str, *, action: str = "verify", log_success: bool = True):
+    """Validity check for an already-bound device (login / heartbeat).
+
+    `action` labels the AuthLog entry; `log_success` can be turned off so a
+    frequent heartbeat only records failures (revoked/expired/unbound) instead
+    of flooding the log with successes.
+    """
     card = _find_card(db, code)
     if not card:
-        _log(db, request, code, device_id, "verify", False, "card not found")
+        _log(db, request, code, device_id, action, False, "card not found")
         return False, "卡密不存在", None
     if card.status == "banned":
-        _log(db, request, code, device_id, "verify", False, "banned")
+        _log(db, request, code, device_id, action, False, "banned")
         return False, "卡密已封禁", None
     eff = card.effective_status
     if eff == "expired":
-        _log(db, request, code, device_id, "verify", False, "expired")
+        _log(db, request, code, device_id, action, False, "expired")
         return False, "卡密已过期", None
     if eff == "used_up":
-        _log(db, request, code, device_id, "verify", False, "used up")
+        _log(db, request, code, device_id, action, False, "used up")
         return False, "点数已用尽", None
     if eff == "unused":
-        _log(db, request, code, device_id, "verify", False, "not activated")
+        _log(db, request, code, device_id, action, False, "not activated")
         return False, "卡密尚未激活", None
 
     dev = (
@@ -110,12 +115,13 @@ def verify(db, request, code: str, device_id: str):
         .first()
     )
     if not dev:
-        _log(db, request, code, device_id, "verify", False, "device not bound")
+        _log(db, request, code, device_id, action, False, "device not bound")
         return False, "设备未绑定", None
 
     dev.last_active_at = datetime.now()
     db.commit()
-    _log(db, request, code, device_id, "verify", True, "ok")
+    if log_success:
+        _log(db, request, code, device_id, action, True, "ok")
     return True, "验证通过", card
 
 

@@ -47,6 +47,7 @@ SESSION_INFO = b"kmauth-session-v1"
 SESSION_AAD = b"kmauth-session-v1"
 PAYLOAD_AAD = b"kmauth-payload-v1"
 PAYLOAD_MAGIC = b"KMENC1\x00"
+HEARTBEAT_AAD = b"kmauth-heartbeat-v1"
 
 
 # --------------------------------------------------------------------------- #
@@ -192,6 +193,25 @@ def open_session_response(
         b64d(obj["gcm_nonce"]), b64d(obj["wrapped_key"]), SESSION_AAD
     )
     return k_payload, obj["card"]
+
+
+# --------------------------------------------------------------------------- #
+# signed liveness (heartbeat): a tamper/replay-proof "still valid" from server #
+# --------------------------------------------------------------------------- #
+def sign_body(obj: dict, aad: bytes = HEARTBEAT_AAD) -> dict:
+    """Return {body, sig}: a canonical JSON body signed by the server key."""
+    body = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    sig = server_signing_key().sign(frame(aad, body.encode()))
+    return {"body": body, "sig": b64e(sig)}
+
+
+def verify_body(resp: dict, server_static_pub_b64: str, aad: bytes = HEARTBEAT_AAD) -> dict:
+    """Client-side: verify signature and return the parsed body (raises on bad)."""
+    body = resp["body"]
+    Ed25519PublicKey.from_public_bytes(b64d(server_static_pub_b64)).verify(
+        b64d(resp["sig"]), frame(aad, body.encode())
+    )
+    return json.loads(body)
 
 
 # --------------------------------------------------------------------------- #

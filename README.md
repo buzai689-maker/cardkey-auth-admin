@@ -79,6 +79,23 @@ POST /api/v1/session   {code, device_id, client_pub(X25519,b64), nonce(b64)}
 
 客户端:验签(pinned pub)→ 校验 nonce/ts → ECDH 出 session_key → 解出 `K_payload` → 解密随程序分发的 `core.enc` → 内存加载运行。patch 掉校验分支没用——二进制里没有密钥,签名/ECDH 也伪造不了。
 
+### 心跳续验(封卡/解绑/过期中途生效)
+
+只在启动时验一次,封了卡也得等下次启动才断。加**签名心跳**后,客户端运行期间按服务器下发的间隔周期性调用:
+
+```
+POST /api/v1/heartbeat  {code, device_id, nonce}
+     每拍重新判定卡有效性(封禁/解绑/过期实时生效),有效则返回签名回执:
+       {success, body, sig},  body = {valid, status, expires_at, ts, nonce, heartbeat}
+       sig = Ed25519(server_priv, frame(HEARTBEAT_AAD, body))
+```
+
+客户端**验签 + 校验 nonce 回显 + 校验时间戳新鲜度**,并 **fail-closed**:网络被断、被篡改、被重放、或 `valid=false`,一律判为失效并停止运行。因此后台一封卡 / 解绑设备 / 卡过期,**下一拍心跳即断**,不用等重启。
+
+- 间隔在「站点设置」配置(`心跳间隔`,10–3600 秒,默认 60),由服务器下发,客户端不自定。
+- 成功心跳不写日志(避免刷屏),失败心跳(封禁/解绑等)会记入验证日志。
+- 参考客户端演示:`python -m examples.client --code <卡> --beats 6 --interval 2`。
+
 ### 多应用隔离(一套后台管多个软件)
 
 后台可管理多个 `Application`,每个软件独立卡池 + 独立 `K_payload`。卡属于哪个应用,`/session` 就下发哪个应用的密钥——**A 软件的卡解不开 B 软件的核心**(实测:换应用的卡去解另一应用的 `core.enc` 得到 `InvalidTag`)。

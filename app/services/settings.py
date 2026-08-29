@@ -8,6 +8,8 @@ DEFAULTS = {
     "allow_self_unbind": "0",
     # activate auto-binds the calling device_id (else only pre-bound devices pass)
     "auto_bind_on_activate": "1",
+    # seconds between client heartbeats (server-driven cadence)
+    "heartbeat_interval": "60",
 }
 
 _cache: dict | None = None

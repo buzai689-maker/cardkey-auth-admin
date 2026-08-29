@@ -21,6 +21,7 @@ import json
 import os
 import platform
 import subprocess
+import time
 import urllib.request
 import uuid
 
@@ -77,7 +78,32 @@ def _get(url: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def run(code: str, server: str, core_path: str, app_key: str = "") -> int:
+def heartbeat_once(server, code, device_id, server_pub):
+    """One signed beat. Fail-closed: any error/tamper/replay -> (False, reason)."""
+    nonce = base64.b64encode(os.urandom(16)).decode()
+    try:
+        resp = _post(
+            f"{server}/api/v1/heartbeat",
+            {"code": code, "device_id": device_id, "nonce": nonce},
+        )
+    except Exception as e:
+        return False, f"network: {e}"
+    if not resp.get("success"):
+        return False, resp.get("message", "invalid")
+    try:
+        obj = crypto.verify_body(resp, server_pub, crypto.HEARTBEAT_AAD)
+    except Exception:
+        return False, "signature invalid"
+    if obj.get("nonce") != nonce:
+        return False, "nonce mismatch"
+    if abs(int(time.time()) - int(obj.get("ts", 0))) > 120:
+        return False, "stale timestamp"
+    if not obj.get("valid"):
+        return False, "not valid"
+    return True, obj
+
+
+def run(code: str, server: str, core_path: str, app_key: str = "", beats: int = 0, interval: int = 0) -> int:
     server = server.rstrip("/")
     device_id = machine_code()
     print(f"[*] device_id = {device_id}")
@@ -126,6 +152,21 @@ def run(code: str, server: str, core_path: str, app_key: str = "") -> int:
         return 1
     print(f"[+] core.enc decrypted in memory ({len(core)} bytes), executing:\n")
     exec(compile(core, core_path, "exec"), {"__name__": "__protected__"})
+
+    # heartbeat: keep re-validating so ban / unbind / expiry stop the app
+    # mid-run. A real client runs this in a background thread for the app's
+    # whole lifetime; here we do `beats` rounds for the demo.
+    if beats:
+        every = interval or int(card.get("heartbeat") or 60)
+        print(f"\n[hb] heartbeat every {every}s (fail-closed):")
+        for i in range(beats):
+            time.sleep(every)
+            ok, info = heartbeat_once(server, code, device_id, server_pub)
+            if ok:
+                print(f"[hb] beat {i + 1}: valid (status={info.get('status')})")
+            else:
+                print(f"[hb] beat {i + 1}: INVALID -> {info} — 停止运行")
+                return 2
     return 0
 
 
@@ -135,5 +176,9 @@ if __name__ == "__main__":
     ap.add_argument("--server", default="http://127.0.0.1:8000")
     ap.add_argument("--core", default="examples/core.enc")
     ap.add_argument("--app", default="", help="optional app_key cross-check")
+    ap.add_argument("--beats", type=int, default=0, help="heartbeat rounds after launch (demo)")
+    ap.add_argument("--interval", type=int, default=0, help="override heartbeat seconds (0=server)")
     args = ap.parse_args()
-    raise SystemExit(run(args.code, args.server, args.core, args.app))
+    raise SystemExit(
+        run(args.code, args.server, args.core, args.app, args.beats, args.interval)
+    )
