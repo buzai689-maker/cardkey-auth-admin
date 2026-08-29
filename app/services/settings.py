@@ -8,8 +8,11 @@ DEFAULTS = {
     "allow_self_unbind": "0",
     # activate auto-binds the calling device_id (else only pre-bound devices pass)
     "auto_bind_on_activate": "1",
-    # seconds between client heartbeats (server-driven cadence)
-    "heartbeat_interval": "60",
+    # client heartbeat cadence: server picks a fresh random delay in [min,max]
+    # seconds each beat (signed), so the client holds no fixed interval constant.
+    # For "~1 hour, varying" set e.g. 3000 / 3600.
+    "heartbeat_min": "45",
+    "heartbeat_max": "90",
 }
 
 _cache: dict | None = None

@@ -48,6 +48,9 @@ SESSION_AAD = b"kmauth-session-v1"
 PAYLOAD_AAD = b"kmauth-payload-v1"
 PAYLOAD_MAGIC = b"KMENC1\x00"
 HEARTBEAT_AAD = b"kmauth-heartbeat-v1"
+BOX_AAD = b"kmauth-box-v1"
+BOX_INFO_C2S = b"kmauth-box-c2s-v1"
+BOX_INFO_S2C = b"kmauth-box-s2c-v1"
 
 
 # --------------------------------------------------------------------------- #
@@ -92,10 +95,16 @@ def ensure_keys() -> None:
         ed.write_bytes(
             k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         )
+    xk = KEYS_DIR / "x25519_priv.key"  # server static key for the sealed-box channel
+    if not xk.exists():
+        x = X25519PrivateKey.generate()
+        xk.write_bytes(
+            x.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        )
     pk = KEYS_DIR / "payload.key"
     if not pk.exists():
         pk.write_bytes(os.urandom(32))
-    for p in (ed, pk):
+    for p in (ed, xk, pk):
         try:
             os.chmod(p, 0o600)
         except OSError:
@@ -111,6 +120,17 @@ def server_signing_key() -> Ed25519PrivateKey:
 
 def server_public_key_b64() -> str:
     return b64e(_raw_pub(server_signing_key().public_key()))
+
+
+def server_enc_private_key() -> X25519PrivateKey:
+    ensure_keys()
+    return X25519PrivateKey.from_private_bytes(
+        (KEYS_DIR / "x25519_priv.key").read_bytes()
+    )
+
+
+def server_enc_public_key_b64() -> str:
+    return b64e(_raw_pub(server_enc_private_key().public_key()))
 
 
 def payload_key() -> bytes:
@@ -193,6 +213,51 @@ def open_session_response(
         b64d(obj["gcm_nonce"]), b64d(obj["wrapped_key"]), SESSION_AAD
     )
     return k_payload, obj["card"]
+
+
+# --------------------------------------------------------------------------- #
+# sealed-box channel: encrypt every client-API request/response app-layer so   #
+# the wire is ciphertext even if TLS is stripped. Confidentiality + server     #
+# authentication (only the holder of the server X25519 key can open/answer).   #
+# --------------------------------------------------------------------------- #
+def _box_keys(shared: bytes, nonce: bytes) -> tuple[bytes, bytes]:
+    k_c2s = HKDF(hashes.SHA256(), 32, salt=nonce, info=BOX_INFO_C2S).derive(shared)
+    k_s2c = HKDF(hashes.SHA256(), 32, salt=nonce, info=BOX_INFO_S2C).derive(shared)
+    return k_c2s, k_s2c
+
+
+def seal_request(plaintext: bytes, server_enc_pub_b64: str) -> tuple[dict, bytes]:
+    """Client-side: seal a request to the server's static X25519 key.
+    Returns (envelope, k_s2c) — keep k_s2c to open the reply."""
+    eph = X25519PrivateKey.generate()
+    server_pub = X25519PublicKey.from_public_bytes(b64d(server_enc_pub_b64))
+    shared = eph.exchange(server_pub)
+    nonce = os.urandom(12)
+    k_c2s, k_s2c = _box_keys(shared, nonce)
+    ct = AESGCM(k_c2s).encrypt(nonce, plaintext, BOX_AAD)
+    env = {"epk": b64e(_raw_pub(eph.public_key())), "n": b64e(nonce), "ct": b64e(ct)}
+    return env, k_s2c
+
+
+def open_envelope(env: dict) -> tuple[bytes, bytes]:
+    """Server-side: open a client envelope. Returns (plaintext, k_s2c) — use
+    k_s2c to seal the reply."""
+    client_pub = X25519PublicKey.from_public_bytes(b64d(env["epk"]))
+    nonce = b64d(env["n"])
+    shared = server_enc_private_key().exchange(client_pub)
+    k_c2s, k_s2c = _box_keys(shared, nonce)
+    pt = AESGCM(k_c2s).decrypt(nonce, b64d(env["ct"]), BOX_AAD)
+    return pt, k_s2c
+
+
+def seal_reply(plaintext: bytes, k_s2c: bytes) -> dict:
+    nonce = os.urandom(12)
+    ct = AESGCM(k_s2c).encrypt(nonce, plaintext, BOX_AAD)
+    return {"n": b64e(nonce), "ct": b64e(ct)}
+
+
+def open_reply(reply: dict, k_s2c: bytes) -> bytes:
+    return AESGCM(k_s2c).decrypt(b64d(reply["n"]), b64d(reply["ct"]), BOX_AAD)
 
 
 # --------------------------------------------------------------------------- #

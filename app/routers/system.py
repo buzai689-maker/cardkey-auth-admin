@@ -32,14 +32,21 @@ def settings_save(
     notice: str = Form(""),
     allow_self_unbind: str = Form(""),
     auto_bind_on_activate: str = Form(""),
-    heartbeat_interval: int = Form(60),
+    heartbeat_min: int = Form(45),
+    heartbeat_max: int = Form(90),
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    try:
-        hb = max(10, min(int(heartbeat_interval), 3600))
-    except (TypeError, ValueError):
-        hb = 60
+    def _clamp(v, default):
+        try:
+            return max(10, min(int(v), 3600))
+        except (TypeError, ValueError):
+            return default
+
+    hb_min = _clamp(heartbeat_min, 45)
+    hb_max = _clamp(heartbeat_max, 90)
+    if hb_max < hb_min:
+        hb_max = hb_min
     settings_svc.set_many(
         db,
         {
@@ -47,7 +54,8 @@ def settings_save(
             "notice": notice.strip(),
             "allow_self_unbind": "1" if allow_self_unbind else "0",
             "auto_bind_on_activate": "1" if auto_bind_on_activate else "0",
-            "heartbeat_interval": str(hb),
+            "heartbeat_min": str(hb_min),
+            "heartbeat_max": str(hb_max),
         },
     )
     log_action(db, request, "settings.save", "settings")

@@ -1,3 +1,5 @@
+import json
+import secrets
 import time
 
 from fastapi import APIRouter, Depends, Request
@@ -39,18 +41,32 @@ class SessionIn(BaseModel):
     app_key: str | None = ""  # optional: cross-check the card belongs to this app
 
 
-def _heartbeat_interval() -> int:
+class SecureIn(BaseModel):
+    epk: str  # base64 client ephemeral X25519 public key
+    n: str  # base64 nonce
+    ct: str  # base64 AES-GCM ciphertext of the inner {op, ...} request
+
+
+def _s(d: dict, key: str) -> str:
+    return (d.get(key) or "").strip()
+
+
+def _next_interval() -> int:
+    """A fresh random heartbeat delay in [min,max] seconds, chosen per beat so
+    the client holds no fixed interval constant to pattern-match / patch."""
     try:
-        return max(10, int(settings_svc.get("heartbeat_interval", "60")))
+        lo = max(10, int(settings_svc.get("heartbeat_min", "45")))
+        hi = max(lo, int(settings_svc.get("heartbeat_max", "90")))
     except (TypeError, ValueError):
-        return 60
+        lo, hi = 45, 90
+    return lo + secrets.randbelow(hi - lo + 1)
 
 
 def _card_payload(card):
     return {
         "status": card.effective_status,
         "app": card.application.app_key if card.application else None,
-        "heartbeat": _heartbeat_interval(),
+        "heartbeat": _next_interval(),  # seconds until the client's first beat
         "type": card.type.name if card.type else None,
         "activated_at": card.activated_at.isoformat() if card.activated_at else None,
         "expires_at": card.expires_at.isoformat() if card.expires_at else None,
@@ -60,98 +76,133 @@ def _card_payload(card):
     }
 
 
-@router.post("/activate")
-def api_activate(request: Request, body: ActivateIn, db: Session = Depends(get_db)):
+# --------------------------------------------------------------------------- #
+# operation handlers — shared by the plaintext endpoints and the /secure box   #
+# --------------------------------------------------------------------------- #
+def _do_activate(db, request, d):
     ok, msg, card = verify_svc.activate(
-        db, request, body.code.strip(), body.device_id.strip(), (body.device_name or "").strip()
+        db, request, _s(d, "code"), _s(d, "device_id"), _s(d, "device_name")
     )
-    return {
-        "success": ok,
-        "message": msg,
-        "data": _card_payload(card) if (ok and card) else None,
-    }
+    return {"success": ok, "message": msg, "data": _card_payload(card) if (ok and card) else None}
 
 
-@router.post("/verify")
-def api_verify(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
-    ok, msg, card = verify_svc.verify(
-        db, request, body.code.strip(), body.device_id.strip()
-    )
-    return {
-        "success": ok,
-        "message": msg,
-        "data": _card_payload(card) if (ok and card) else None,
-    }
+def _do_verify(db, request, d):
+    ok, msg, card = verify_svc.verify(db, request, _s(d, "code"), _s(d, "device_id"))
+    return {"success": ok, "message": msg, "data": _card_payload(card) if (ok and card) else None}
 
 
-@router.post("/unbind")
-def api_unbind(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
-    ok, msg, _ = verify_svc.self_unbind(
-        db, request, body.code.strip(), body.device_id.strip()
-    )
+def _do_unbind(db, request, d):
+    ok, msg, _ = verify_svc.self_unbind(db, request, _s(d, "code"), _s(d, "device_id"))
     return {"success": ok, "message": msg}
 
 
-@router.post("/heartbeat")
-def api_heartbeat(request: Request, body: HeartbeatIn, db: Session = Depends(get_db)):
-    """Signed liveness check. Re-validates the card every beat so ban / unbind /
-    expiry take effect mid-session. Returns {success, body, sig} on valid — the
-    client must verify the signature + echoed nonce and fail closed otherwise."""
+def _do_heartbeat(db, request, d):
     ok, msg, card = verify_svc.verify(
-        db,
-        request,
-        body.code.strip(),
-        body.device_id.strip(),
-        action="heartbeat",
-        log_success=False,
+        db, request, _s(d, "code"), _s(d, "device_id"),
+        action="heartbeat", log_success=False,
     )
     if not ok or card is None:
         return {"success": False, "message": msg}
     obj = {
         "v": 1,
         "ts": int(time.time()),
-        "nonce": body.nonce,
+        "nonce": d.get("nonce", ""),
         "valid": True,
         "status": card.effective_status,
         "expires_at": card.expires_at.isoformat() if card.expires_at else None,
-        "heartbeat": _heartbeat_interval(),
+        "next": _next_interval(),  # signed: when to beat again (randomized)
     }
     return {"success": True, "message": "ok", **crypto.sign_body(obj)}
 
 
-@router.get("/pubkey")
-def api_pubkey():
-    """Server static Ed25519 public key. Pin/embed this in the client."""
-    return {"alg": "ed25519", "public_key": crypto.server_public_key_b64()}
-
-
-@router.post("/session")
-def api_session(request: Request, body: SessionIn, db: Session = Depends(get_db)):
-    """Authenticate + bind, then deliver K_payload over a signed ECDH channel.
-
-    Same auth/bind semantics as /activate; on success returns {body, sig} where
-    body carries the wrapped payload key and card status, signed by the server.
-    """
+def _do_session(db, request, d):
     ok, msg, card = verify_svc.activate(
-        db, request, body.code.strip(), body.device_id.strip(), (body.device_name or "").strip()
+        db, request, _s(d, "code"), _s(d, "device_id"), _s(d, "device_name")
     )
     if not ok or card is None:
         return {"success": False, "message": msg}
-
-    # resolve which app's K_payload to deliver (per-app isolation)
     key = None
     if card.application_id:
         app = card.application
         if not app or not app.is_active:
             return {"success": False, "message": "应用未启用"}
-        if body.app_key and body.app_key != app.app_key:
+        if d.get("app_key") and d.get("app_key") != app.app_key:
             return {"success": False, "message": "卡与应用不匹配"}
         key = app_svc.payload_key_bytes(app)
-
     try:
         session = crypto.build_session_response(
-            body.client_pub, body.nonce, _card_payload(card), int(time.time()), key
+            _s(d, "client_pub"), _s(d, "nonce"), _card_payload(card), int(time.time()), key
         )
     except Exception:
         return {"success": False, "message": "握手参数无效"}
     return {"success": True, "message": "ok", **session}
+
+
+_OPS = {
+    "activate": _do_activate,
+    "verify": _do_verify,
+    "unbind": _do_unbind,
+    "heartbeat": _do_heartbeat,
+    "session": _do_session,
+}
+
+
+# --------------------------------------------------------------------------- #
+# plaintext endpoints (rely on TLS for confidentiality)                        #
+# --------------------------------------------------------------------------- #
+@router.post("/activate")
+def api_activate(request: Request, body: ActivateIn, db: Session = Depends(get_db)):
+    return _do_activate(db, request, body.model_dump())
+
+
+@router.post("/verify")
+def api_verify(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
+    return _do_verify(db, request, body.model_dump())
+
+
+@router.post("/unbind")
+def api_unbind(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
+    return _do_unbind(db, request, body.model_dump())
+
+
+@router.post("/heartbeat")
+def api_heartbeat(request: Request, body: HeartbeatIn, db: Session = Depends(get_db)):
+    """Signed liveness check. Re-validates the card every beat so ban / unbind /
+    expiry take effect mid-session; the signed reply also carries the randomized
+    `next` delay. Client must verify signature + echoed nonce and fail closed."""
+    return _do_heartbeat(db, request, body.model_dump())
+
+
+@router.post("/session")
+def api_session(request: Request, body: SessionIn, db: Session = Depends(get_db)):
+    """Authenticate + bind, then deliver K_payload over a signed ECDH channel."""
+    return _do_session(db, request, body.model_dump())
+
+
+# --------------------------------------------------------------------------- #
+# encrypted transport: every op wrapped in a sealed box (app-layer, no plaintext)
+# --------------------------------------------------------------------------- #
+@router.post("/secure")
+def api_secure(request: Request, env: SecureIn, db: Session = Depends(get_db)):
+    """Open a sealed-box request {epk,n,ct} carrying an inner {op, ...}, run it,
+    and return the sealed reply. The card code etc. never appear in plaintext."""
+    try:
+        pt, k_s2c = crypto.open_envelope(env.model_dump())
+        inner = json.loads(pt)
+    except Exception:
+        return {"error": "bad_envelope"}
+    handler = _OPS.get(inner.get("op"))
+    result = handler(db, request, inner) if handler else {"success": False, "message": "unknown op"}
+    return crypto.seal_reply(json.dumps(result).encode(), k_s2c)
+
+
+@router.get("/pubkey")
+def api_pubkey():
+    """Server public keys to pin/embed in the client: Ed25519 for signature
+    verification, X25519 for the sealed-box encrypted transport."""
+    return {
+        "alg": "ed25519",
+        "public_key": crypto.server_public_key_b64(),
+        "enc_alg": "x25519",
+        "enc_public_key": crypto.server_enc_public_key_b64(),
+    }

@@ -1,18 +1,20 @@
 """Reference client for the card-key network authorization.
 
-Flow per launch:
-  1. compute a stable machine code (device_id) from hardware
-  2. X25519 ephemeral keypair + nonce
-  3. POST /api/v1/session {code, device_id, client_pub, nonce}
-  4. verify the server's Ed25519 signature (pinned public key)
-  5. ECDH -> session key -> unwrap K_payload
-  6. decrypt the shipped core.enc in memory with K_payload and run it
+Every call goes through the sealed-box transport (/api/v1/secure): the inner
+{op, code, device_id, ...} is X25519-ECDH-encrypted to the server's static key,
+so the card code never appears in plaintext on the wire (independent of TLS).
 
-The crypto is language-agnostic (see README "客户端协议"); a real C/C++/C#/Delphi
-client reimplements steps 2-6. This Python version reuses app.crypto for brevity.
+Flow per launch:
+  1. machine code (device_id) from hardware
+  2. fetch + pin server keys (Ed25519 sign, X25519 box)
+  3. op=session  -> unwrap K_payload -> decrypt core.enc -> run
+  4. op=heartbeat every server-chosen (randomized) delay; fail-closed on trouble
+
+The crypto is language-agnostic (see README); a real C/C++/C#/Delphi client
+reimplements it. This Python version reuses app.crypto for brevity.
 
     python -m examples.client --code DAY-XXXX-XXXX-XXXX
-    python -m examples.client --code DAY-... --server http://127.0.0.1:8000 --core examples/core.enc
+    python -m examples.client --code DAY-... --beats 6 --interval 2
 """
 import argparse
 import base64
@@ -30,10 +32,11 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from app import crypto
 
-# Pin the server key here in production (paste the /api/v1/pubkey value). When
-# empty this demo fetches it once over the wire — which a MITM could swap, so a
-# shipped client MUST hardcode it.
-PINNED_SERVER_PUB = ""
+# Pin the server keys here in production (paste /api/v1/pubkey values). When
+# empty this demo fetches them once — which a MITM could swap, so a shipped
+# client MUST hardcode both.
+PINNED_SERVER_PUB = ""      # Ed25519 signature key
+PINNED_SERVER_ENC_PUB = ""  # X25519 sealed-box key
 
 
 def machine_code() -> str:
@@ -66,9 +69,7 @@ def machine_code() -> str:
 
 def _post(url: str, obj: dict) -> dict:
     data = json.dumps(obj).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}
-    )
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode())
 
@@ -78,20 +79,28 @@ def _get(url: str) -> dict:
         return json.loads(r.read().decode())
 
 
-def heartbeat_once(server, code, device_id, server_pub):
-    """One signed beat. Fail-closed: any error/tamper/replay -> (False, reason)."""
+def secure_call(server: str, enc_pub: str, op: str, fields: dict) -> dict:
+    """Wrap {op, **fields} in a sealed box, POST /secure, open the sealed reply."""
+    inner = dict(fields)
+    inner["op"] = op
+    env, k_s2c = crypto.seal_request(json.dumps(inner).encode(), enc_pub)
+    reply = _post(f"{server}/api/v1/secure", env)
+    if "ct" not in reply:
+        raise RuntimeError(f"secure transport error: {reply}")
+    return json.loads(crypto.open_reply(reply, k_s2c))
+
+
+def heartbeat_once(server, code, device_id, sign_pub, enc_pub):
+    """One signed beat over the box. Fail-closed: any error -> (False, reason)."""
     nonce = base64.b64encode(os.urandom(16)).decode()
     try:
-        resp = _post(
-            f"{server}/api/v1/heartbeat",
-            {"code": code, "device_id": device_id, "nonce": nonce},
-        )
+        resp = secure_call(server, enc_pub, "heartbeat", {"code": code, "device_id": device_id, "nonce": nonce})
     except Exception as e:
         return False, f"network: {e}"
     if not resp.get("success"):
         return False, resp.get("message", "invalid")
     try:
-        obj = crypto.verify_body(resp, server_pub, crypto.HEARTBEAT_AAD)
+        obj = crypto.verify_body(resp, sign_pub, crypto.HEARTBEAT_AAD)
     except Exception:
         return False, "signature invalid"
     if obj.get("nonce") != nonce:
@@ -108,7 +117,9 @@ def run(code: str, server: str, core_path: str, app_key: str = "", beats: int = 
     device_id = machine_code()
     print(f"[*] device_id = {device_id}")
 
-    server_pub = PINNED_SERVER_PUB or _get(f"{server}/api/v1/pubkey")["public_key"]
+    keys = _get(f"{server}/api/v1/pubkey")
+    sign_pub = PINNED_SERVER_PUB or keys["public_key"]
+    enc_pub = PINNED_SERVER_ENC_PUB or keys["enc_public_key"]
 
     client_priv = X25519PrivateKey.generate()
     client_pub_b64 = base64.b64encode(
@@ -116,24 +127,17 @@ def run(code: str, server: str, core_path: str, app_key: str = "", beats: int = 
     ).decode()
     nonce_b64 = base64.b64encode(os.urandom(16)).decode()
 
-    req = {
-        "code": code,
-        "device_id": device_id,
-        "client_pub": client_pub_b64,
-        "nonce": nonce_b64,
-    }
+    fields = {"code": code, "device_id": device_id, "client_pub": client_pub_b64, "nonce": nonce_b64}
     if app_key:
-        req["app_key"] = app_key  # optional: server rejects if card belongs elsewhere
-    resp = _post(f"{server}/api/v1/session", req)
+        fields["app_key"] = app_key
+    resp = secure_call(server, enc_pub, "session", fields)
     if not resp.get("success"):
         print(f"[!] authorization failed: {resp.get('message')}")
         return 1
 
     try:
-        k_payload, card = crypto.open_session_response(
-            resp, client_priv, nonce_b64, server_pub
-        )
-    except Exception as e:  # InvalidSignature / nonce mismatch / decrypt error
+        k_payload, card = crypto.open_session_response(resp, client_priv, nonce_b64, sign_pub)
+    except Exception as e:
         print(f"[!] handshake verification failed: {e!r}")
         return 1
 
@@ -147,26 +151,24 @@ def run(code: str, server: str, core_path: str, app_key: str = "", beats: int = 
     try:
         core = crypto.decrypt_payload(blob, k_payload)
     except Exception:
-        # wrong K_payload — e.g. this card belongs to a different application
         print("[!] core decryption failed — card does not match this software.")
         return 1
     print(f"[+] core.enc decrypted in memory ({len(core)} bytes), executing:\n")
     exec(compile(core, core_path, "exec"), {"__name__": "__protected__"})
 
-    # heartbeat: keep re-validating so ban / unbind / expiry stop the app
-    # mid-run. A real client runs this in a background thread for the app's
-    # whole lifetime; here we do `beats` rounds for the demo.
+    # heartbeat: re-validate on a server-chosen randomized cadence so ban /
+    # unbind / expiry stop the app mid-run. A real client runs this in a thread.
     if beats:
         every = interval or int(card.get("heartbeat") or 60)
-        print(f"\n[hb] heartbeat every {every}s (fail-closed):")
+        print(f"\n[hb] heartbeat (randomized cadence, fail-closed):")
         for i in range(beats):
             time.sleep(every)
-            ok, info = heartbeat_once(server, code, device_id, server_pub)
-            if ok:
-                print(f"[hb] beat {i + 1}: valid (status={info.get('status')})")
-            else:
+            ok, info = heartbeat_once(server, code, device_id, sign_pub, enc_pub)
+            if not ok:
                 print(f"[hb] beat {i + 1}: INVALID -> {info} — 停止运行")
                 return 2
+            every = interval or int(info.get("next") or every)
+            print(f"[hb] beat {i + 1}: valid (status={info.get('status')}, next in {every}s)")
     return 0
 
 
@@ -179,6 +181,4 @@ if __name__ == "__main__":
     ap.add_argument("--beats", type=int, default=0, help="heartbeat rounds after launch (demo)")
     ap.add_argument("--interval", type=int, default=0, help="override heartbeat seconds (0=server)")
     args = ap.parse_args()
-    raise SystemExit(
-        run(args.code, args.server, args.core, args.app, args.beats, args.interval)
-    )
+    raise SystemExit(run(args.code, args.server, args.core, args.app, args.beats, args.interval))

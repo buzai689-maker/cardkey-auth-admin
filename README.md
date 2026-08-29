@@ -79,6 +79,20 @@ POST /api/v1/session   {code, device_id, client_pub(X25519,b64), nonce(b64)}
 
 客户端:验签(pinned pub)→ 校验 nonce/ts → ECDH 出 session_key → 解出 `K_payload` → 解密随程序分发的 `core.enc` → 内存加载运行。patch 掉校验分支没用——二进制里没有密钥,签名/ECDH 也伪造不了。
 
+### 全程加密(sealed box,不靠 TLS)
+
+明文端点(`/activate` `/verify` `/heartbeat` `/session`)是**签名的但字段明文**,靠 TLS 保密——TLS 被剥(授权用户拿自己的 mitmproxy)卡密就暴露。要全程密文,走**加密信封** `POST /api/v1/secure`:
+
+```
+客户端: 内层 {op, code, device_id, ...} 用临时 X25519 ECDH 到服务器静态 X25519 公钥
+        -> AES-GCM 加密 -> {epk, n, ct} 上线(卡密等全是密文)
+服务器: 用静态私钥 ECDH 解开,分发到对应 op,回执同样封成 {n, ct} 密文
+```
+
+- 机密性 + 服务器认证一体:只有持服务器 X25519 私钥的一方能解请求/产生合法回执,中间人读不了也伪造不了(即便 TLS 被剥)。
+- 服务器公钥两把都要 pin 进客户端:Ed25519(验签)+ X25519(信封),`GET /api/v1/pubkey` 返回 `public_key` 与 `enc_public_key`。
+- 参考客户端已全程走 `/secure`;实测上线信封只有 `{epk,n,ct}`,卡密不出现在明文里。
+
 ### 心跳续验(封卡/解绑/过期中途生效)
 
 只在启动时验一次,封了卡也得等下次启动才断。加**签名心跳**后,客户端运行期间按服务器下发的间隔周期性调用:
@@ -92,9 +106,9 @@ POST /api/v1/heartbeat  {code, device_id, nonce}
 
 客户端**验签 + 校验 nonce 回显 + 校验时间戳新鲜度**,并 **fail-closed**:网络被断、被篡改、被重放、或 `valid=false`,一律判为失效并停止运行。因此后台一封卡 / 解绑设备 / 卡过期,**下一拍心跳即断**,不用等重启。
 
-- 间隔在「站点设置」配置(`心跳间隔`,10–3600 秒,默认 60),由服务器下发,客户端不自定。
+- **间隔随机**:服务器每拍在 `[heartbeat_min, heartbeat_max]` 内随机选下次延迟,并**签名**放进回执 `next` 字段下发。客户端二进制里**没有固定间隔常数**可 pattern-match / patch,抬高逆向成本。范围在「站点设置」配(10–3600 秒);要"约每小时且抖动"设 `3000 / 3600`。
 - 成功心跳不写日志(避免刷屏),失败心跳(封禁/解绑等)会记入验证日志。
-- 参考客户端演示:`python -m examples.client --code <卡> --beats 6 --interval 2`。
+- 参考客户端演示:`python -m examples.client --code <卡> --beats 6`(间隔由服务器随机下发)。
 
 ### 多应用隔离(一套后台管多个软件)
 
