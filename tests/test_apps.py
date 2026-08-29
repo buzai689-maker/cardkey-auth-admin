@@ -21,6 +21,8 @@ from app.services import applications as app_svc  # noqa: E402
 from app.services import settings as ss  # noqa: E402
 from app.services.cards import find_or_create_time_type, generate_cards  # noqa: E402
 
+from tests import secure_util  # noqa: E402
+
 init_db()
 bootstrap_admin()
 ss.refresh_cache()
@@ -37,7 +39,7 @@ def _session(code, device_id, app_key=""):
     body = {"code": code, "device_id": device_id, "client_pub": pub_b64, "nonce": nonce}
     if app_key:
         body["app_key"] = app_key
-    return priv, nonce, client.post("/api/v1/session", json=body).json()
+    return priv, nonce, secure_util.call(client, "session", body)
 
 
 def _make_card(app_id):

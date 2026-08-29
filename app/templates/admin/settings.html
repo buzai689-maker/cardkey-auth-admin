@@ -33,14 +33,13 @@
   <h3>客户端验证 API</h3>
   <p class="muted">客户端(被授权的程序)用卡密 + 机器码调用以下接口:</p>
   <div class="dl mono" style="font-size:13px">
-    <div>POST /api/v1/secure&nbsp;&nbsp;&nbsp; 加密信封 {epk,n,ct},内含 {op,...} — 推荐,全程密文</div>
-    <div class="muted">明文端点(靠 TLS 保密):</div>
-    <div>POST /api/v1/activate&nbsp; {"code","device_id","device_name?"}</div>
-    <div>POST /api/v1/session&nbsp;&nbsp; {"code","device_id","client_pub","nonce"}</div>
-    <div>POST /api/v1/heartbeat {"code","device_id","nonce"}</div>
-    <div>POST /api/v1/verify&nbsp;&nbsp;&nbsp; {"code","device_id"}</div>
-    <div>POST /api/v1/unbind&nbsp;&nbsp;&nbsp; {"code","device_id"}</div>
+    <div>GET&nbsp; /api/v1/pubkey&nbsp; 服务器公钥(Ed25519 验签 + X25519 信封),客户端 pin</div>
+    <div>POST /api/v1/secure&nbsp; 加密信封 {epk,n,ct},内含 {op,...} — 唯一入口,全程密文</div>
   </div>
+  <p class="muted" style="margin-top:8px">
+    op ∈ activate / verify / unbind / heartbeat / session。明文端点已关闭(调用返回 404),
+    卡密等字段不再明文上线。
+  </p>
   <p class="muted" style="margin-top:10px">返回 <code>{"success":bool,"message":str,"data":{...}}</code>。详见 README。</p>
 </div>
 {% endblock %}

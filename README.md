@@ -39,27 +39,12 @@ python run.py
 
 ## 客户端验证 API
 
-被授权的客户端用**卡密 + 机器码(device_id)**调用。请求 / 响应均为 JSON,返回结构:
-`{"success": bool, "message": str, "data": {...} | null}`。
+客户端只有**一个入口**:加密信封 `POST /api/v1/secure`(明文端点已关闭,见下文「全程加密」)。内层是
+`{op, code, device_id, ...}`,`op ∈ activate | verify | unbind | heartbeat | session`;
+解开后返回结构 `{"success": bool, "message": str, "data": {...} | null}`(session/heartbeat 另带签名回执)。
 
-```bash
-# 激活并绑定当前设备(首次使用时开始计时 / 绑定)
-curl -X POST http://127.0.0.1:8000/api/v1/activate \
-  -H "Content-Type: application/json" \
-  -d '{"code":"DAY-XXXX-XXXX-XXXX","device_id":"MACHINE-CODE-001","device_name":"PC-01"}'
-
-# 心跳 / 登录校验(需该设备已绑定)
-curl -X POST http://127.0.0.1:8000/api/v1/verify \
-  -H "Content-Type: application/json" \
-  -d '{"code":"DAY-XXXX-XXXX-XXXX","device_id":"MACHINE-CODE-001"}'
-
-# 自助解绑(需在站点设置里开启 allow_self_unbind)
-curl -X POST http://127.0.0.1:8000/api/v1/unbind \
-  -H "Content-Type: application/json" \
-  -d '{"code":"DAY-XXXX-XXXX-XXXX","device_id":"MACHINE-CODE-001"}'
-```
-
-`data` 字段:`status` / `type` / `activated_at` / `expires_at` / `max_devices` / `bound_devices` / `remaining_count`。
+参考客户端 `examples/client.py` 封装了全过程(取机器码 → 握手 → 心跳),照它移植即可;
+`data` 字段:`status` / `app` / `type` / `activated_at` / `expires_at` / `max_devices` / `bound_devices` / `remaining_count` / `heartbeat`。
 
 ## 软件加密(客户端保护 / 网络验证)
 
@@ -81,7 +66,7 @@ POST /api/v1/session   {code, device_id, client_pub(X25519,b64), nonce(b64)}
 
 ### 全程加密(sealed box,不靠 TLS)
 
-明文端点(`/activate` `/verify` `/heartbeat` `/session`)是**签名的但字段明文**,靠 TLS 保密——TLS 被剥(授权用户拿自己的 mitmproxy)卡密就暴露。要全程密文,走**加密信封** `POST /api/v1/secure`:
+**明文端点已移除,客户端只能走加密信封** `POST /api/v1/secure`,卡密等字段不再明文上线(即便 TLS 被授权用户拿自己的 mitmproxy 剥掉):
 
 ```
 客户端: 内层 {op, code, device_id, ...} 用临时 X25519 ECDH 到服务器静态 X25519 公钥

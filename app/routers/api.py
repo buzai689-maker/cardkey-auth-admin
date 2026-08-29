@@ -15,32 +15,6 @@ from ..services import verify as verify_svc
 router = APIRouter(prefix="/api/v1", tags=["client-api"])
 
 
-class ActivateIn(BaseModel):
-    code: str
-    device_id: str
-    device_name: str | None = ""
-
-
-class VerifyIn(BaseModel):
-    code: str
-    device_id: str
-
-
-class HeartbeatIn(BaseModel):
-    code: str
-    device_id: str
-    nonce: str  # base64 client nonce, fresh per beat
-
-
-class SessionIn(BaseModel):
-    code: str
-    device_id: str
-    client_pub: str  # base64 raw X25519 public key
-    nonce: str  # base64 client nonce
-    device_name: str | None = ""
-    app_key: str | None = ""  # optional: cross-check the card belongs to this app
-
-
 class SecureIn(BaseModel):
     epk: str  # base64 client ephemeral X25519 public key
     n: str  # base64 nonce
@@ -77,7 +51,7 @@ def _card_payload(card):
 
 
 # --------------------------------------------------------------------------- #
-# operation handlers — shared by the plaintext endpoints and the /secure box   #
+# operation handlers — invoked only through the encrypted /secure transport    #
 # --------------------------------------------------------------------------- #
 def _do_activate(db, request, d):
     ok, msg, card = verify_svc.activate(
@@ -148,44 +122,14 @@ _OPS = {
 
 
 # --------------------------------------------------------------------------- #
-# plaintext endpoints (rely on TLS for confidentiality)                        #
-# --------------------------------------------------------------------------- #
-@router.post("/activate")
-def api_activate(request: Request, body: ActivateIn, db: Session = Depends(get_db)):
-    return _do_activate(db, request, body.model_dump())
-
-
-@router.post("/verify")
-def api_verify(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
-    return _do_verify(db, request, body.model_dump())
-
-
-@router.post("/unbind")
-def api_unbind(request: Request, body: VerifyIn, db: Session = Depends(get_db)):
-    return _do_unbind(db, request, body.model_dump())
-
-
-@router.post("/heartbeat")
-def api_heartbeat(request: Request, body: HeartbeatIn, db: Session = Depends(get_db)):
-    """Signed liveness check. Re-validates the card every beat so ban / unbind /
-    expiry take effect mid-session; the signed reply also carries the randomized
-    `next` delay. Client must verify signature + echoed nonce and fail closed."""
-    return _do_heartbeat(db, request, body.model_dump())
-
-
-@router.post("/session")
-def api_session(request: Request, body: SessionIn, db: Session = Depends(get_db)):
-    """Authenticate + bind, then deliver K_payload over a signed ECDH channel."""
-    return _do_session(db, request, body.model_dump())
-
-
-# --------------------------------------------------------------------------- #
-# encrypted transport: every op wrapped in a sealed box (app-layer, no plaintext)
+# the ONLY client entrypoint: every op wrapped in a sealed box (no plaintext)  #
 # --------------------------------------------------------------------------- #
 @router.post("/secure")
 def api_secure(request: Request, env: SecureIn, db: Session = Depends(get_db)):
     """Open a sealed-box request {epk,n,ct} carrying an inner {op, ...}, run it,
-    and return the sealed reply. The card code etc. never appear in plaintext."""
+    and return the sealed reply. The card code etc. never appear in plaintext.
+
+    ops: activate | verify | unbind | heartbeat | session (see README)."""
     try:
         pt, k_s2c = crypto.open_envelope(env.model_dump())
         inner = json.loads(pt)

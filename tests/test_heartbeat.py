@@ -22,6 +22,8 @@ from app.services import applications as app_svc  # noqa: E402
 from app.services import settings as ss  # noqa: E402
 from app.services.cards import find_or_create_time_type, generate_cards, set_status  # noqa: E402
 
+from tests import secure_util  # noqa: E402
+
 init_db()
 bootstrap_admin()
 ss.refresh_cache()
@@ -39,16 +41,15 @@ def _make_active_card(device_id="HB-DEV"):
         code = cards[0].code
     finally:
         db.close()
-    client.post("/api/v1/activate", json={"code": code, "device_id": device_id})
+    secure_util.call(client, "activate", {"code": code, "device_id": device_id})
     return code
 
 
 def _beat(code, device_id="HB-DEV"):
     nonce = base64.b64encode(os.urandom(16)).decode()
-    resp = client.post(
-        "/api/v1/heartbeat",
-        json={"code": code, "device_id": device_id, "nonce": nonce},
-    ).json()
+    resp = secure_util.call(
+        client, "heartbeat", {"code": code, "device_id": device_id, "nonce": nonce}
+    )
     return nonce, resp
 
 
