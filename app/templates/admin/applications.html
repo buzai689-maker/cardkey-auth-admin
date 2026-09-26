@@ -2,9 +2,11 @@
 {% block title %}应用 · {{ site.site_name }}{% endblock %}
 {% block crumb %}应用{% endblock %}
 {% block content %}
+{% set is_super = current_admin and current_admin.role == 'super' %}
 <div class="page-head"><h1>应用(软件)</h1></div>
 
-<div class="two-col">
+<div class="{{ 'two-col' if is_super else '' }}">
+  {% if is_super %}
   <div class="panel">
     <h3>新建应用</h3>
     <form method="post" action="/admin/applications/create">
@@ -15,14 +17,26 @@
     <p class="muted" style="margin-top:12px">
       每个应用独立卡池 + 独立 <code>K_payload</code>。创建后用它的 <code>app_key</code> 生成卡密、
       用 <code>tools/protect.py --app &lt;app_key&gt;</code> 加密该软件的核心。
+      要让子账号只管某个软件,到 <a href="/admin/admins">管理员</a> 页给它分配应用。
     </p>
   </div>
+  {% endif %}
 
   <div class="panel">
-    <h3>已有应用</h3>
+    <h3>{{ '已有应用' if is_super else '我的应用' }}</h3>
+    {% if not is_super %}
+    <p class="muted">只显示分配给你的应用。需要其它软件的权限,请联系超级管理员。</p>
+    {% endif %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>名称</th><th>app_key</th><th>K_payload 指纹</th><th>卡数</th><th>状态</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th>名称</th><th>app_key</th><th>K_payload 指纹</th><th>卡数</th>
+            {% if is_super %}<th>授权子账号</th>{% endif %}
+            <th>状态</th>
+            {% if is_super %}<th></th>{% endif %}
+          </tr>
+        </thead>
         <tbody>
         {% for a in apps %}
           <tr>
@@ -30,7 +44,11 @@
             <td class="mono">{{ a.app_key }}</td>
             <td class="mono muted">{{ fps.get(a.id, '') }}</td>
             <td><a href="/admin/cards?application_id={{ a.id }}">{{ counts.get(a.id, 0) }}</a></td>
+            {% if is_super %}
+            <td class="muted">{{ operators.get(a.id, [])|join(', ') or '-' }}</td>
+            {% endif %}
             <td>{% if a.is_active %}<span class="badge ok">启用</span>{% else %}<span class="badge muted">停用</span>{% endif %}</td>
+            {% if is_super %}
             <td class="right">
               <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/toggle"><button class="btn sm">{{ '停用' if a.is_active else '启用' }}</button></form>
               <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/rotate-key"
@@ -38,9 +56,14 @@
               <form class="inline-form" method="post" action="/admin/applications/{{ a.id }}/delete"
                     onsubmit="return confirm('删除应用 {{ a.name }}?')"><button class="btn sm danger">删除</button></form>
             </td>
+            {% endif %}
           </tr>
         {% else %}
-          <tr><td colspan="6" class="muted">还没有应用,先在左侧创建一个</td></tr>
+          <tr>
+            <td colspan="{{ 7 if is_super else 5 }}" class="muted">
+              {% if is_super %}还没有应用,先在左侧创建一个{% else %}你的账号尚未分配任何应用{% endif %}
+            </td>
+          </tr>
         {% endfor %}
         </tbody>
       </table>

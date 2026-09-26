@@ -10,6 +10,7 @@
 - **设备管理**:查看绑定设备、**编辑设备**(名称 / 备注 / 换绑机器码)、**解绑设备**(释放绑定位)
 - **客户端验证 API**:`activate` / `verify` / `unbind`
 - 仪表盘统计、验证日志 + 后台操作审计、管理员(RBAC:super / operator)、站点设置
+- **子账号按应用授权**:给操作员(代理 / 子账号)分配指定软件,它只能给这些软件生成、管理卡密,看不到其它软件的数据
 
 ## 技术栈
 
@@ -103,6 +104,19 @@ POST /api/v1/heartbeat  {code, device_id, nonce}
 - 服务器 Ed25519 签名公钥**全局共用**一把(客户端 pin 它);隔离体现在 per-app 的 `K_payload` 与卡归属。
 - 轮换某应用的 `K_payload` 后,该应用的核心需重新加密分发(其它应用不受影响)。
 
+### 子账号按应用授权(操作员只管指定软件)
+
+管理员分两种角色:`super` 拥有全部应用和后台设置;`operator`(子账号 / 代理)只能在**分配给它的应用**范围内工作。
+分配关系存在 `admin_applications` 表(多对多),在「管理员」页维护:
+
+- 新建操作员时勾选可用应用;列表里每个操作员可随时「分配应用」增减,**立刻生效**,不用重新登录。
+- 生成卡密:下拉只列出已分配且启用的应用;伪造 `application_id` 提交会被拒绝(403)并记入操作审计(`access.denied`)。
+- 卡密管理 / 详情 / 封禁 / 重置 / 解绑 / 删除 / 导出、设备管理、仪表盘统计、验证日志:全部按已分配应用过滤,越权访问返回 403。
+- 操作审计日志:操作员只看自己的操作;超管看全部。
+- 「应用」页:创建 / 停用 / 轮换密钥 / 删除仅超管可用;操作员只看到自己应用的只读列表(拿 `app_key` 用)。
+- 未归属任何应用的旧卡(`application_id` 为空)只有超管可见。
+- **升级注意**:升级后已有的操作员账号默认**没有任何应用**,需超管到「管理员」页分配一次;超管账号不受影响。
+
 ### 工作流
 
 ```bash
@@ -146,14 +160,14 @@ app/
   crypto.py          Ed25519 签名 / X25519 ECDH / AES-GCM / HKDF(客户端保护)
   deps.py            会话鉴权依赖(current_admin / require_super)
   templating.py      Jinja2 + 过滤器 + flash
-  models/            Admin / Application / CardType / Card / Device / AuthLog / AuditLog / Setting
-  services/          applications / cards / devices / verify / settings / audit
+  models/            Admin(+admin_applications) / Application / CardType / Card / Device / AuthLog / AuditLog / Setting
+  services/          applications / cards / devices / verify / settings / audit / scope(子账号按应用过滤)
   routers/           auth / dashboard / applications / cards / devices / logs / system / api
   templates/  static/
 tools/protect.py     用 K_payload 加/解密软件核心(build 期)
 examples/client.py   参考客户端(机器码 -> 握手 -> 解密执行 core.enc)
 scripts/seed.py      演示数据
-tests/               test_flow(API+登录) / test_crypto(握手+载荷)
+tests/               test_flow(API+登录) / test_crypto(握手+载荷) / test_scope(子账号按应用授权)
 ```
 
 ```bash

@@ -11,28 +11,76 @@
       <label>用户名 <span class="req">*</span><input name="username" required></label>
       <label>密码 <span class="req">*</span><input name="password" type="text" required></label>
       <label>角色
-        <select name="role">
-          <option value="operator">operator(操作员)</option>
+        <select name="role" id="role-select" onchange="toggleAppsPicker()">
+          <option value="operator">operator(操作员 / 子账号)</option>
           <option value="super">super(超级管理员)</option>
         </select>
       </label>
+      <div id="apps-picker">
+        <label style="margin-bottom:4px">可用应用
+          <span class="muted">(子账号只能给勾选的软件生成 / 管理卡密)</span>
+        </label>
+        {% if apps %}
+        <div class="check-group">
+          {% for a in apps %}
+          <label class="checkbox">
+            <input type="checkbox" name="app_ids" value="{{ a.id }}">
+            {{ a.name }} <span class="mono muted">{{ a.app_key }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">还没有应用,先到 <a href="/admin/applications">应用</a> 创建后再分配。</p>
+        {% endif %}
+      </div>
       <button class="btn primary" type="submit">创建</button>
     </form>
+    <p class="muted" style="margin-top:12px">
+      超级管理员拥有全部应用与后台设置;操作员只看得到分配给它的应用下的卡密、设备和日志。
+    </p>
   </div>
 
   <div class="panel">
     <h3>管理员列表</h3>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>最近登录</th><th></th></tr></thead>
+        <thead><tr><th>用户名</th><th>角色</th><th>可用应用</th><th>状态</th><th>最近登录</th><th></th></tr></thead>
         <tbody>
         {% for a in admins %}
           <tr>
             <td>{{ a.username }}{% if a.id == current_admin.id %} <span class="muted">(你)</span>{% endif %}</td>
             <td>{{ a.role }}</td>
+            <td>
+              {% if a.role == 'super' %}
+                <span class="badge ok">全部</span>
+              {% elif a.applications %}
+                {% for x in a.applications %}<span class="badge muted">{{ x.name }}</span> {% endfor %}
+              {% else %}
+                <span class="badge warn">未分配</span>
+              {% endif %}
+            </td>
             <td>{% if a.is_active %}<span class="badge ok">启用</span>{% else %}<span class="badge muted">停用</span>{% endif %}</td>
             <td class="muted">{{ a.last_login_at|dt }}</td>
             <td class="right">
+              {% if a.role != 'super' %}
+              <details>
+                <summary class="btn sm">分配应用</summary>
+                <form method="post" action="/admin/admins/{{ a.id }}/apps" style="margin-top:8px; min-width:220px; text-align:left">
+                  {% set mine = a.applications|map(attribute='id')|list %}
+                  <div class="check-group">
+                  {% for x in apps %}
+                    <label class="checkbox">
+                      <input type="checkbox" name="app_ids" value="{{ x.id }}" {{ 'checked' if x.id in mine else '' }}>
+                      {{ x.name }} <span class="mono muted">{{ x.app_key }}</span>
+                    </label>
+                  {% else %}
+                    <span class="muted">还没有应用</span>
+                  {% endfor %}
+                  </div>
+                  <button class="btn primary sm" type="submit">保存</button>
+                </form>
+              </details>
+              {% endif %}
               <details>
                 <summary class="btn sm">重置密码</summary>
                 <form method="post" action="/admin/admins/{{ a.id }}/reset-pwd" style="margin-top:8px">
@@ -52,4 +100,11 @@
     </div>
   </div>
 </div>
+
+<script>
+function toggleAppsPicker() {
+  var isSuper = document.getElementById('role-select').value === 'super';
+  document.getElementById('apps-picker').style.display = isSuper ? 'none' : '';
+}
+</script>
 {% endblock %}

@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import BASE_DIR, settings
@@ -12,6 +14,7 @@ from .models import Admin
 from .routers import api, applications, auth, cards, dashboard, devices, logs, system
 from .security import hash_password
 from .services import settings as settings_svc
+from .templating import render
 
 
 def bootstrap_admin() -> None:
@@ -63,6 +66,15 @@ async def _auth_required_handler(request: Request, exc: AuthRequired):
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return RedirectResponse("/admin/login", status_code=303)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    # Backend pages get a styled 403 (operator touching another app's data,
+    # or a super-only action); everything else keeps FastAPI's JSON default.
+    if exc.status_code == 403 and request.url.path.startswith("/admin"):
+        return render(request, "403.html", status_code=403, detail=exc.detail)
+    return await http_exception_handler(request, exc)
 
 
 for r in (auth, dashboard, applications, cards, devices, logs, system, api):

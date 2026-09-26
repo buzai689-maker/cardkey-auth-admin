@@ -22,3 +22,7 @@ class Application(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     cards: Mapped[list["Card"]] = relationship(back_populates="application")
+    # Operator accounts granted access to this application.
+    admins: Mapped[list["Admin"]] = relationship(
+        secondary="admin_applications", back_populates="applications"
+    )

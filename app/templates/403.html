@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}无权访问 · {{ site.site_name }}{% endblock %}
+{% block crumb %}无权访问{% endblock %}
+{% block content %}
+<div class="panel" style="max-width:520px">
+  <h3>403 · 无权访问</h3>
+  <p class="muted">{{ detail or '你的账号没有访问该资源的权限。' }}</p>
+  <p class="muted">操作员只能查看和管理分配给自己的应用;需要更多权限请联系超级管理员。</p>
+  <div class="btn-row" style="margin-top:12px">
+    <a class="btn primary" href="/admin">返回仪表盘</a>
+    <a class="btn" href="/admin/cards">卡密管理</a>
+  </div>
+</div>
+{% endblock %}

@@ -48,8 +48,10 @@
     卡归属所选应用,只能解锁该应用的核心。卡号为随机唯一码(去易混字符,形如
     <code class="mono">A7C4-9K2M-7Q3D-5W8H</code>)。生成后可在卡密列表按批次筛选并导出 txt。
   </p>
-  {% else %}
+  {% elif current_admin and current_admin.role == 'super' %}
   <p class="muted">还没有应用,请先到 <a href="/admin/applications">应用</a> 创建一个要保护的软件,再来生成卡密。</p>
+  {% else %}
+  <p class="muted">你的账号尚未分配任何应用。请联系超级管理员在「管理员」页为你分配可用软件后,再来生成卡密。</p>
   {% endif %}
 </div>
 

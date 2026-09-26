@@ -1,16 +1,33 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from ..database import get_db
 from ..deps import get_current_admin
 from ..models import Admin, Card, Device
 from ..services import devices as dev_svc
+from ..services import scope
 from ..services.audit import log_action
 from ..templating import flash, render
 from ..utils import paginate
 
 router = APIRouter(prefix="/admin/devices")
+
+
+def _load_device(db, request, admin, device_id):
+    """Fetch a device the admin may act on (403 + audit entry if its card
+    belongs to an application outside the admin's scope)."""
+    dev = (
+        db.query(Device)
+        .options(joinedload(Device.card))
+        .filter_by(id=device_id)
+        .first()
+    )
+    if dev:
+        app_id = dev.card.application_id if dev.card else None
+        if not scope.can_access_app(admin, app_id):
+            scope.forbid(db, request, dev.device_id, f"device_id={dev.id}")
+    return dev
 
 
 @router.get("")
@@ -22,12 +39,17 @@ def list_devices(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Device).options(joinedload(Device.card))
+    query = (
+        db.query(Device)
+        .join(Card, Device.card_id == Card.id)
+        .options(contains_eager(Device.card))
+    )
+    query = scope.scope_cards(query, admin)
     if status:
         query = query.filter(Device.status == status)
     q = q.strip()
     if q:
-        query = query.join(Card, Device.card_id == Card.id).filter(
+        query = query.filter(
             (Device.device_id.like(f"%{q}%")) | (Card.code.like(f"%{q}%"))
         )
     query = query.order_by(Device.id.desc())
@@ -53,7 +75,7 @@ def edit_device(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    dev = db.get(Device, device_id)
+    dev = _load_device(db, request, admin, device_id)
     if not dev:
         flash(request, "设备不存在", "danger")
         return RedirectResponse(back or "/admin/devices", status_code=303)
@@ -77,7 +99,7 @@ def unbind_device(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    dev = db.get(Device, device_id)
+    dev = _load_device(db, request, admin, device_id)
     if not dev:
         flash(request, "设备不存在", "danger")
         return RedirectResponse(back or "/admin/devices", status_code=303)
@@ -98,7 +120,7 @@ def delete_device(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    dev = db.get(Device, device_id)
+    dev = _load_device(db, request, admin, device_id)
     if dev:
         did = dev.device_id
         db.delete(dev)

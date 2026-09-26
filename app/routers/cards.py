@@ -6,6 +6,7 @@ from ..database import get_db
 from ..deps import get_current_admin
 from ..models import Admin, Application, Card, CardType
 from ..services import cards as card_svc
+from ..services import scope
 from ..services.audit import log_action
 from ..templating import flash, render
 from ..utils import paginate, to_int
@@ -13,8 +14,10 @@ from ..utils import paginate, to_int
 router = APIRouter(prefix="/admin/cards")
 
 
-def _base_query(db, status, type_id, batch, q, application_id=0):
+def _base_query(db, admin, status, type_id, batch, q, application_id=0):
     query = db.query(Card).options(joinedload(Card.type), joinedload(Card.application))
+    # operators only ever see cards of the applications assigned to them
+    query = scope.scope_cards(query, admin)
     if application_id:
         query = query.filter(Card.application_id == application_id)
     if status:
@@ -26,6 +29,21 @@ def _base_query(db, status, type_id, batch, q, application_id=0):
     if q:
         query = query.filter(Card.code.like(f"%{q}%"))
     return query.order_by(Card.id.desc())
+
+
+def _load_card(db, request, admin, card_id, *options):
+    """Fetch a card the admin may act on.
+
+    Returns None when the card does not exist; audit-logs and raises 403 when
+    it belongs to an application outside the admin's scope.
+    """
+    query = db.query(Card).filter_by(id=card_id)
+    if options:
+        query = query.options(*options)
+    card = query.first()
+    if card and not scope.can_access_card(admin, card):
+        scope.forbid(db, request, card.code, f"card_id={card.id}")
+    return card
 
 
 @router.get("")
@@ -40,10 +58,10 @@ def list_cards(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, status, type_id, batch, q.strip(), application_id)
+    query = _base_query(db, admin, status, type_id, batch, q.strip(), application_id)
     items, pg = paginate(query, page, per_page=20)
     types = db.query(CardType).order_by(CardType.id.desc()).all()
-    apps = db.query(Application).order_by(Application.id.desc()).all()
+    apps = scope.visible_apps(db, admin)
     return render(
         request,
         "admin/cards.html",
@@ -68,7 +86,7 @@ def generate_form(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    apps = db.query(Application).filter_by(is_active=True).order_by(Application.id.desc()).all()
+    apps = scope.visible_apps(db, admin, active_only=True)
     return render(request, "admin/cards_generate.html", active="generate", apps=apps)
 
 
@@ -91,6 +109,9 @@ def generate_do(
     if not app:
         flash(request, "请先选择所属应用", "danger")
         return RedirectResponse("/admin/cards/generate", status_code=303)
+    if not scope.can_access_app(admin, app.id):
+        # the form never offers this app to the operator; this is a forged request
+        scope.forbid(db, request, app.app_key, "card.generate")
 
     permanent = bool(is_permanent)
     days = max(0, to_int(days))
@@ -133,7 +154,7 @@ def export_cards(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, status, type_id, batch, q.strip(), application_id)
+    query = _base_query(db, admin, status, type_id, batch, q.strip(), application_id)
     codes = [c.code for c in query.limit(20000).all()]
     fname = f"cards_{batch or 'all'}.txt"
     return PlainTextResponse(
@@ -149,15 +170,14 @@ def card_detail(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = (
-        db.query(Card)
-        .options(
-            joinedload(Card.type),
-            joinedload(Card.application),
-            joinedload(Card.devices),
-        )
-        .filter_by(id=card_id)
-        .first()
+    card = _load_card(
+        db,
+        request,
+        admin,
+        card_id,
+        joinedload(Card.type),
+        joinedload(Card.application),
+        joinedload(Card.devices),
     )
     if not card:
         flash(request, "卡密不存在", "danger")
@@ -178,7 +198,7 @@ def card_edit(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if not card:
         flash(request, "卡密不存在", "danger")
         return RedirectResponse("/admin/cards", status_code=303)
@@ -200,7 +220,7 @@ def card_ban(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if card:
         card_svc.set_status(db, card, "banned")
         log_action(db, request, "card.ban", card.code)
@@ -215,7 +235,7 @@ def card_unban(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if card:
         # restore to active if it was ever activated, else unused
         card_svc.set_status(db, card, "active" if card.activated_at else "unused")
@@ -231,7 +251,7 @@ def card_reset(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if card:
         card_svc.reset_card(db, card)
         log_action(db, request, "card.reset", card.code, "解绑全部设备并重置")
@@ -248,7 +268,7 @@ def card_unbind_devices(
     db: Session = Depends(get_db),
 ):
     """Unbind all devices of a card WITHOUT resetting its status/expiry."""
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if card:
         n = card_svc.unbind_all_devices(db, card)
         log_action(db, request, "card.unbind_all", card.code, f"unbound={n}")
@@ -263,7 +283,7 @@ def card_delete(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    card = db.get(Card, card_id)
+    card = _load_card(db, request, admin, card_id)
     if card:
         code = card.code
         db.delete(card)

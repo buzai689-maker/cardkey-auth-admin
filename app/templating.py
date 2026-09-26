@@ -43,7 +43,7 @@ def _pop_flashes(request):
     return request.session.pop("_flashes", [])
 
 
-def render(request, template: str, **ctx):
+def render(request, template: str, status_code: int = 200, **ctx):
     context = {
         "current_admin": getattr(request.state, "admin", None),
         "site": settings_svc.get_settings(),
@@ -51,4 +51,4 @@ def render(request, template: str, **ctx):
         "active": ctx.pop("active", ""),
     }
     context.update(ctx)
-    return templates.TemplateResponse(request, template, context)
+    return templates.TemplateResponse(request, template, context, status_code=status_code)

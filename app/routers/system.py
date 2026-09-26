@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
 from ..deps import get_current_admin, require_super
-from ..models import Admin
+from ..models import Admin, Application
 from ..security import hash_password
 from ..services import settings as settings_svc
 from ..services.audit import log_action
 from ..templating import flash, render
+from ..utils import to_int
 
 router = APIRouter(prefix="/admin")
 
@@ -64,14 +65,28 @@ def settings_save(
 
 
 # ------------------------- 管理员管理 (super only) -------------------------
+def _pick_apps(db, app_ids) -> list[Application]:
+    """Resolve the app_ids checkboxes of the admin forms to Application rows."""
+    ids = {to_int(i) for i in app_ids} - {0}
+    if not ids:
+        return []
+    return db.query(Application).filter(Application.id.in_(sorted(ids))).all()
+
+
 @router.get("/admins")
 def admins_page(
     request: Request,
     admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
-    admins = db.query(Admin).order_by(Admin.id).all()
-    return render(request, "admin/admins.html", active="admins", admins=admins)
+    admins = (
+        db.query(Admin)
+        .options(selectinload(Admin.applications))
+        .order_by(Admin.id)
+        .all()
+    )
+    apps = db.query(Application).order_by(Application.id.desc()).all()
+    return render(request, "admin/admins.html", active="admins", admins=admins, apps=apps)
 
 
 @router.post("/admins/create")
@@ -80,6 +95,7 @@ def admin_create(
     username: str = Form(...),
     password: str = Form(...),
     role: str = Form("operator"),
+    app_ids: list[int] = Form([]),
     admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
@@ -90,16 +106,49 @@ def admin_create(
     if db.query(Admin).filter_by(username=username).first():
         flash(request, "用户名已存在", "danger")
         return RedirectResponse("/admin/admins", status_code=303)
-    db.add(
-        Admin(
-            username=username,
-            password_hash=hash_password(password),
-            role="super" if role == "super" else "operator",
-        )
-    )
+    role = "super" if role == "super" else "operator"
+    target = Admin(username=username, password_hash=hash_password(password), role=role)
+    if role == "operator":
+        # a sub-account only gets the applications ticked on the form
+        target.applications = _pick_apps(db, app_ids)
+    db.add(target)
     db.commit()
-    log_action(db, request, "admin.create", username, role)
+    if role == "super":
+        detail = "super"
+    else:
+        detail = "operator apps=" + (",".join(a.app_key for a in target.applications) or "-")
+    log_action(db, request, "admin.create", username, detail)
     flash(request, f"管理员「{username}」已创建", "ok")
+    return RedirectResponse("/admin/admins", status_code=303)
+
+
+@router.post("/admins/{admin_id}/apps")
+def admin_set_apps(
+    admin_id: int,
+    request: Request,
+    app_ids: list[int] = Form([]),
+    admin: Admin = Depends(require_super),
+    db: Session = Depends(get_db),
+):
+    """Replace the set of applications an operator may work with."""
+    target = db.get(Admin, admin_id)
+    if not target:
+        flash(request, "管理员不存在", "danger")
+        return RedirectResponse("/admin/admins", status_code=303)
+    if target.role == "super":
+        flash(request, "超级管理员拥有全部应用,无需分配", "info")
+        return RedirectResponse("/admin/admins", status_code=303)
+    target.applications = _pick_apps(db, app_ids)
+    db.commit()
+    names = ", ".join(a.name for a in target.applications) or "无"
+    log_action(
+        db,
+        request,
+        "admin.apps",
+        target.username,
+        ",".join(a.app_key for a in target.applications) or "-",
+    )
+    flash(request, f"「{target.username}」可用应用已更新: {names}", "ok")
     return RedirectResponse("/admin/admins", status_code=303)
 
 

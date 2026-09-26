@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 
 from .. import crypto
 from ..database import get_db
-from ..deps import get_current_admin
+from ..deps import get_current_admin, require_super
 from ..models import Admin, Application
 from ..services import applications as app_svc
+from ..services import scope
 from ..services.audit import log_action
 from ..templating import flash, render
 
@@ -19,9 +20,13 @@ def list_apps(
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    apps = db.query(Application).order_by(Application.id.desc()).all()
+    # super: every app (with the operators assigned to each); operator: own apps, read-only
+    apps = scope.visible_apps(db, admin)
     counts = {a.id: app_svc.card_count(db, a) for a in apps}
     fps = {a.id: app_svc.key_fingerprint(a) for a in apps}
+    operators = {
+        a.id: [m.username for m in a.admins if m.role != "super"] for a in apps
+    }
     return render(
         request,
         "admin/applications.html",
@@ -29,16 +34,19 @@ def list_apps(
         apps=apps,
         counts=counts,
         fps=fps,
+        operators=operators,
         server_pubkey=crypto.server_public_key_b64(),
     )
 
 
+# ---- mutations are super-only: an operator must never create apps, rotate
+# ---- another product's K_payload or delete one.
 @router.post("/create")
 def create_app(
     request: Request,
     name: str = Form(...),
     remark: str = Form(""),
-    admin: Admin = Depends(get_current_admin),
+    admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
     app = app_svc.create_application(db, name, remark)
@@ -51,7 +59,7 @@ def create_app(
 def toggle_app(
     app_id: int,
     request: Request,
-    admin: Admin = Depends(get_current_admin),
+    admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
     app = db.get(Application, app_id)
@@ -66,7 +74,7 @@ def toggle_app(
 def rotate_app_key(
     app_id: int,
     request: Request,
-    admin: Admin = Depends(get_current_admin),
+    admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
     app = db.get(Application, app_id)
@@ -81,7 +89,7 @@ def rotate_app_key(
 def delete_app(
     app_id: int,
     request: Request,
-    admin: Admin = Depends(get_current_admin),
+    admin: Admin = Depends(require_super),
     db: Session = Depends(get_db),
 ):
     app = db.get(Application, app_id)
