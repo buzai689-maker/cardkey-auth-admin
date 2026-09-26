@@ -24,8 +24,12 @@ def _load_device(db, request, admin, device_id):
         .first()
     )
     if dev:
-        app_id = dev.card.application_id if dev.card else None
-        if not scope.can_access_app(admin, app_id):
+        allowed = (
+            scope.can_access_card(admin, dev.card)
+            if dev.card
+            else scope.can_access_app(admin, None)
+        )
+        if not allowed:
             scope.forbid(db, request, dev.device_id, f"device_id={dev.id}")
     return dev
 

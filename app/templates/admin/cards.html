@@ -5,7 +5,7 @@
 <div class="page-head">
   <h1>卡密管理</h1>
   <div class="btn-row">
-    <a class="btn" href="/admin/cards/export?application_id={{ f.application_id }}&status={{ f.status }}&type_id={{ f.type_id }}&batch={{ f.batch }}&q={{ f.q }}">导出当前筛选</a>
+    <a class="btn" href="/admin/cards/export?application_id={{ f.application_id }}&status={{ f.status }}&type_id={{ f.type_id }}&batch={{ f.batch }}&q={{ f.q }}&creator={{ f.creator }}">导出当前筛选</a>
     <a class="btn primary" href="/admin/cards/generate">＋ 生成卡密</a>
   </div>
 </div>
@@ -35,6 +35,16 @@
       {% endfor %}
     </select>
   </label>
+  {% if creators %}
+  <label>创建者
+    <select name="creator">
+      <option value="">全部</option>
+      {% for u in creators %}
+      <option value="{{ u }}" {{ 'selected' if f.creator == u else '' }}>{{ u }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
   <label>批次<input name="batch" value="{{ f.batch }}" placeholder="批次号"></label>
   <label>关键字<input name="q" value="{{ f.q }}" placeholder="卡密片段"></label>
   <button class="btn" type="submit">筛选</button>
@@ -44,7 +54,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>卡密</th><th>应用</th><th>类型</th><th>状态</th><th>设备</th><th>激活时间</th><th>到期时间</th><th>批次</th><th></th></tr>
+        <tr><th>卡密</th><th>应用</th><th>类型</th><th>状态</th><th>设备</th><th>激活时间</th><th>到期时间</th><th>批次</th><th>创建者</th><th></th></tr>
       </thead>
       <tbody>
       {% for c in cards %}
@@ -57,6 +67,7 @@
           <td class="muted">{{ c.activated_at|dt }}</td>
           <td class="muted">{{ c.expires_at|dt if c.expires_at else ('永久' if c.type and c.type.is_permanent else '-') }}</td>
           <td class="mono muted">{{ c.batch_no }}</td>
+          <td class="muted">{{ c.created_by or '-' }}</td>
           <td class="right">
             {% if c.bound_count > 0 %}
             <form class="inline-form" method="post" action="/admin/cards/{{ c.id }}/unbind-devices"
@@ -69,7 +80,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="9" class="muted">没有匹配的卡密</td></tr>
+        <tr><td colspan="10" class="muted">没有匹配的卡密</td></tr>
       {% endfor %}
       </tbody>
     </table>

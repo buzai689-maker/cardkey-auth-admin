@@ -53,5 +53,9 @@ def rotate_key(db, app: Application) -> None:
     db.commit()
 
 
-def card_count(db, app: Application) -> int:
-    return db.query(Card).filter_by(application_id=app.id).count()
+def card_count(db, app: Application, criterion=None) -> int:
+    """Cards in an application; `criterion` narrows it (e.g. an operator's own cards)."""
+    q = db.query(Card).filter_by(application_id=app.id)
+    if criterion is not None:
+        q = q.filter(criterion)
+    return q.count()

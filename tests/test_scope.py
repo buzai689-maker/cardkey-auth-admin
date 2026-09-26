@@ -1,6 +1,7 @@
-"""Operator (子账号) accounts are confined to the applications assigned to them:
-card generation, card/device management, dashboard, logs and the app list all
-filter by that assignment; super admins are unrestricted."""
+"""Operator (子账号 / 代理) accounts are confined to the applications assigned to
+them AND, within those, to the cards they generated themselves. Card
+generation, card/device management, dashboard, logs and the app list all
+filter that way; super admins are unrestricted and can filter by creator."""
 import os
 import re
 from pathlib import Path
@@ -30,6 +31,7 @@ bootstrap_admin()
 ss.refresh_cache()
 crypto.ensure_keys()
 
+SUPER_USER, SUPER_PWD = "admin", "admin888"
 OP_USER, OP_PWD = "op1", "op1-secret"
 
 
@@ -44,11 +46,13 @@ def _login(username, password):
     return c
 
 
-def _card(app_id, prefix):
+def _card(app_id, prefix, created_by):
     db = SessionLocal()
     try:
         t = find_or_create_time_type(db, 30, False, 2)
-        _, cards = generate_cards(db, t, 1, application_id=app_id, prefix=prefix, length=10)
+        _, cards = generate_cards(
+            db, t, 1, application_id=app_id, prefix=prefix, length=10, created_by=created_by
+        )
         return cards[0].id, cards[0].code
     finally:
         db.close()
@@ -81,6 +85,29 @@ def _device_status(dev_id):
         db.close()
 
 
+def _count(app_id=None, created_by=None):
+    db = SessionLocal()
+    try:
+        q = db.query(Card)
+        if app_id is not None:
+            q = q.filter(Card.application_id == app_id)
+        if created_by is not None:
+            q = q.filter(Card.created_by == created_by)
+        return q.count()
+    finally:
+        db.close()
+
+
+def _stat_numbers(html):
+    return [int(n) for n in re.findall(r'<div class="n">(\d+)</div>', html)]
+
+
+def _app_count_shown(html, app_id):
+    m = re.search(rf'application_id={app_id}">(\d+)</a>', html)
+    assert m, "card count cell not found"
+    return int(m.group(1))
+
+
 @pytest.fixture(scope="module")
 def ctx():
     db = SessionLocal()
@@ -95,13 +122,17 @@ def ctx():
     }
     db.close()
 
-    c["a_card_id"], c["a_code"] = _card(c["a_id"], "AAA-")
-    c["b_card_id"], c["b_code"] = _card(c["b_id"], "BBB-")
-    c["legacy_card_id"], c["legacy_code"] = _card(None, "OLD-")
+    # the operator's own card in AlphaApp ...
+    c["a_card_id"], c["a_code"] = _card(c["a_id"], "AAA-", OP_USER)
+    # ... a card the owner issued in the SAME app (must stay hidden from the operator)
+    c["a_super_card_id"], c["a_super_code"] = _card(c["a_id"], "ASU-", SUPER_USER)
+    c["b_card_id"], c["b_code"] = _card(c["b_id"], "BBB-", SUPER_USER)
+    c["legacy_card_id"], c["legacy_code"] = _card(None, "OLD-", SUPER_USER)
     c["a_dev_id"] = _device(c["a_card_id"], "MACHINE-ALPHA")
+    c["a_super_dev_id"] = _device(c["a_super_card_id"], "MACHINE-ALPHA-SUPER")
     c["b_dev_id"] = _device(c["b_card_id"], "MACHINE-BETA")
 
-    super_c = _login("admin", "admin888")
+    super_c = _login(SUPER_USER, SUPER_PWD)
     # super creates the operator through the real form, granting AlphaApp only
     r = super_c.post(
         "/admin/admins/create",
@@ -136,10 +167,7 @@ def test_generate_page_lists_only_assigned_apps(ctx):
 
 
 def test_generate_for_foreign_app_is_forbidden_and_audited(ctx):
-    db = SessionLocal()
-    before = db.query(Card).filter_by(application_id=ctx["b_id"]).count()
-    db.close()
-
+    before = _count(app_id=ctx["b_id"])
     r = ctx["op"].post(
         "/admin/cards/generate",
         data={"application_id": ctx["b_id"], "days": 30, "max_devices": 1, "count": 3},
@@ -147,9 +175,9 @@ def test_generate_for_foreign_app_is_forbidden_and_audited(ctx):
     )
     assert r.status_code == 403
     assert "无权" in r.text  # styled 403 page, not raw JSON
+    assert _count(app_id=ctx["b_id"]) == before
 
     db = SessionLocal()
-    assert db.query(Card).filter_by(application_id=ctx["b_id"]).count() == before
     denied = (
         db.query(AuditLog)
         .filter_by(action="access.denied", admin_id=ctx["op_id"], target=ctx["b_key"])
@@ -159,7 +187,7 @@ def test_generate_for_foreign_app_is_forbidden_and_audited(ctx):
     db.close()
 
 
-def test_generate_for_own_app_works(ctx):
+def test_generate_for_own_app_works_and_is_owned(ctx):
     r = ctx["op"].post(
         "/admin/cards/generate",
         data={"application_id": ctx["a_id"], "days": 7, "max_devices": 1, "count": 2, "prefix": "OPGEN-"},
@@ -171,41 +199,68 @@ def test_generate_for_own_app_works(ctx):
     assert len(made) == 2
     assert all(c.application_id == ctx["a_id"] and c.created_by == OP_USER for c in made)
     db.close()
-
-
-def test_card_list_and_export_are_scoped(ctx):
+    # the operator sees what it just issued
     html = ctx["op"].get("/admin/cards").text
+    assert html.count("OPGEN-") == 2
+
+
+def test_card_list_and_export_are_scoped_to_own_cards(ctx):
+    op, sup = ctx["op"], ctx["super"]
+    html = op.get("/admin/cards").text
     assert ctx["a_code"] in html
+    assert ctx["a_super_code"] not in html  # same app, but issued by the owner
     assert ctx["b_code"] not in html
     assert ctx["legacy_code"] not in html  # unassigned legacy cards: super only
 
-    # explicitly asking for the other app's cards yields nothing
-    html = ctx["op"].get(f"/admin/cards?application_id={ctx['b_id']}").text
-    assert ctx["b_code"] not in html
+    # explicit filters cannot widen the scope
+    assert ctx["b_code"] not in op.get(f"/admin/cards?application_id={ctx['b_id']}").text
+    assert ctx["a_super_code"] not in op.get(f"/admin/cards?creator={SUPER_USER}").text
+    assert ctx["a_super_code"] not in op.get(f"/admin/cards?q={ctx['a_super_code'][:6]}").text
 
-    codes = ctx["op"].get("/admin/cards/export").text.split()
-    assert ctx["a_code"] in codes and ctx["b_code"] not in codes and ctx["legacy_code"] not in codes
+    codes = op.get("/admin/cards/export").text.split()
+    assert ctx["a_code"] in codes
+    assert ctx["a_super_code"] not in codes and ctx["b_code"] not in codes
+    assert ctx["legacy_code"] not in codes
 
-    html = ctx["super"].get("/admin/cards").text
-    assert ctx["a_code"] in html and ctx["b_code"] in html and ctx["legacy_code"] in html
+    html = sup.get("/admin/cards").text
+    for k in ("a_code", "a_super_code", "b_code", "legacy_code"):
+        assert ctx[k] in html
+    assert "创建者" in html and OP_USER in html
+
+
+def test_super_can_filter_by_creator(ctx):
+    sup = ctx["super"]
+    html = sup.get(f"/admin/cards?creator={OP_USER}").text
+    assert ctx["a_code"] in html and "OPGEN-" in html
+    assert ctx["a_super_code"] not in html and ctx["b_code"] not in html
+    html = sup.get(f"/admin/cards?creator={SUPER_USER}").text
+    assert ctx["a_super_code"] in html and ctx["b_code"] in html
+    assert ctx["a_code"] not in html
+    codes = sup.get(f"/admin/cards/export?creator={OP_USER}").text.split()
+    assert ctx["a_code"] in codes and ctx["a_super_code"] not in codes
+    # the creator filter is offered to super admins only
+    assert 'name="creator"' in sup.get("/admin/cards").text
+    assert 'name="creator"' not in ctx["op"].get("/admin/cards").text
 
 
 def test_card_detail_and_actions_are_scoped(ctx):
     op = ctx["op"]
     assert op.get(f"/admin/cards/{ctx['a_card_id']}").status_code == 200
+    assert op.get(f"/admin/cards/{ctx['a_super_card_id']}").status_code == 403
     assert op.get(f"/admin/cards/{ctx['b_card_id']}").status_code == 403
     assert op.get(f"/admin/cards/{ctx['legacy_card_id']}").status_code == 403
 
-    for action in ("ban", "unban", "reset", "unbind-devices", "delete"):
-        r = op.post(f"/admin/cards/{ctx['b_card_id']}/{action}", follow_redirects=False)
-        assert r.status_code == 403, action
-    r = op.post(
-        f"/admin/cards/{ctx['b_card_id']}/edit",
-        data={"remark": "x", "max_devices": 5, "extend_minutes": 0},
-        follow_redirects=False,
-    )
-    assert r.status_code == 403
-    assert _card_status(ctx["b_card_id"]) == "unused"
+    for cid in (ctx["a_super_card_id"], ctx["b_card_id"]):
+        for action in ("ban", "unban", "reset", "unbind-devices", "delete"):
+            r = op.post(f"/admin/cards/{cid}/{action}", follow_redirects=False)
+            assert r.status_code == 403, (cid, action)
+        r = op.post(
+            f"/admin/cards/{cid}/edit",
+            data={"remark": "x", "max_devices": 5, "extend_minutes": 0},
+            follow_redirects=False,
+        )
+        assert r.status_code == 403
+        assert _card_status(cid) == "unused"
 
     r = op.post(f"/admin/cards/{ctx['a_card_id']}/ban", follow_redirects=False)
     assert r.status_code == 303
@@ -216,22 +271,21 @@ def test_devices_are_scoped(ctx):
     op = ctx["op"]
     html = op.get("/admin/devices").text
     assert "MACHINE-ALPHA" in html
+    assert "MACHINE-ALPHA-SUPER" not in html  # owner's card in the same app
     assert "MACHINE-BETA" not in html
-    # searching by the other app's card code must not leak it either
-    html = op.get(f"/admin/devices?q={ctx['b_code']}").text
-    assert "MACHINE-BETA" not in html
+    # searching by another card's code must not leak its devices either
+    assert "MACHINE-ALPHA-SUPER" not in op.get(f"/admin/devices?q={ctx['a_super_code']}").text
+    assert "MACHINE-BETA" not in op.get(f"/admin/devices?q={ctx['b_code']}").text
 
-    r = op.post(f"/admin/devices/{ctx['b_dev_id']}/unbind", follow_redirects=False)
-    assert r.status_code == 403
-    assert _device_status(ctx["b_dev_id"]) == "active"
-    r = op.post(
-        f"/admin/devices/{ctx['b_dev_id']}/edit",
-        data={"device_name": "hacked"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 403
-    r = op.post(f"/admin/devices/{ctx['b_dev_id']}/delete", follow_redirects=False)
-    assert r.status_code == 403
+    for dev_id in (ctx["a_super_dev_id"], ctx["b_dev_id"]):
+        r = op.post(f"/admin/devices/{dev_id}/unbind", follow_redirects=False)
+        assert r.status_code == 403
+        assert _device_status(dev_id) == "active"
+        r = op.post(
+            f"/admin/devices/{dev_id}/edit", data={"device_name": "hacked"}, follow_redirects=False
+        )
+        assert r.status_code == 403
+        assert op.post(f"/admin/devices/{dev_id}/delete", follow_redirects=False).status_code == 403
 
     r = op.post(f"/admin/devices/{ctx['a_dev_id']}/unbind", follow_redirects=False)
     assert r.status_code == 303
@@ -241,18 +295,14 @@ def test_devices_are_scoped(ctx):
 def test_dashboard_is_scoped(ctx):
     html = ctx["op"].get("/admin").text
     assert html.count('class="stat"') == 6
-    nums = [int(n) for n in re.findall(r'<div class="n">(\d+)</div>', html)]
-    db = SessionLocal()
-    a_total = db.query(Card).filter_by(application_id=ctx["a_id"]).count()
-    all_total = db.query(Card).count()
-    db.close()
-    assert nums[0] == a_total < all_total
+    own = _count(app_id=ctx["a_id"], created_by=OP_USER)
+    assert own < _count(app_id=ctx["a_id"]) < _count()
+    assert _stat_numbers(html)[0] == own
     assert ctx["a_code"] in html
-    assert ctx["b_code"] not in html
+    assert ctx["a_super_code"] not in html and ctx["b_code"] not in html
 
     html = ctx["super"].get("/admin").text
-    nums = [int(n) for n in re.findall(r'<div class="n">(\d+)</div>', html)]
-    assert nums[0] == all_total
+    assert _stat_numbers(html)[0] == _count()
 
 
 def test_logs_are_scoped(ctx):
@@ -260,6 +310,7 @@ def test_logs_are_scoped(ctx):
     db.add_all(
         [
             AuthLog(code=ctx["a_code"], device_id="MACHINE-ALPHA", action="verify", success=True),
+            AuthLog(code=ctx["a_super_code"], device_id="MACHINE-ALPHA-SUPER", action="verify", success=True),
             AuthLog(code=ctx["b_code"], device_id="MACHINE-BETA", action="verify", success=True),
         ]
     )
@@ -267,13 +318,14 @@ def test_logs_are_scoped(ctx):
     db.close()
 
     html = ctx["op"].get("/admin/logs?tab=auth").text
-    assert ctx["a_code"] in html and ctx["b_code"] not in html
+    assert ctx["a_code"] in html
+    assert ctx["a_super_code"] not in html and ctx["b_code"] not in html
     # audit tab: only the operator's own actions (super's admin.create is hidden)
     html = ctx["op"].get("/admin/logs?tab=audit").text
     assert "card.ban" in html and "admin.create" not in html
 
     html = ctx["super"].get("/admin/logs?tab=auth").text
-    assert ctx["a_code"] in html and ctx["b_code"] in html
+    assert ctx["a_code"] in html and ctx["a_super_code"] in html and ctx["b_code"] in html
     html = ctx["super"].get("/admin/logs?tab=audit").text
     assert "admin.create" in html and "access.denied" in html
 
@@ -284,6 +336,8 @@ def test_applications_page_is_readonly_and_scoped_for_operators(ctx):
     assert r.status_code == 200
     assert ctx["a_key"] in r.text and ctx["b_key"] not in r.text
     assert "新建应用" not in r.text and "轮换密钥" not in r.text
+    # the card count shown to the operator covers only its own cards
+    assert _app_count_shown(r.text, ctx["a_id"]) == _count(app_id=ctx["a_id"], created_by=OP_USER)
 
     assert op.post("/admin/applications/create", data={"name": "Evil"}, follow_redirects=False).status_code == 403
     for action in ("toggle", "rotate-key", "delete"):
@@ -298,6 +352,7 @@ def test_applications_page_is_readonly_and_scoped_for_operators(ctx):
 
     html = ctx["super"].get("/admin/applications").text
     assert "新建应用" in html and OP_USER in html  # 授权子账号 column
+    assert _app_count_shown(html, ctx["a_id"]) == _count(app_id=ctx["a_id"])
 
 
 def test_operator_cannot_manage_admins(ctx):
@@ -322,7 +377,17 @@ def test_super_reassigns_apps_and_it_takes_effect_immediately(ctx):
     assert r.status_code == 303
     html = op.get("/admin/cards/generate").text
     assert ctx["a_key"] in html and ctx["b_key"] in html
-    assert op.get(f"/admin/cards/{ctx['b_card_id']}").status_code == 200
+    # BetaApp is assigned now, but its existing card was issued by the owner: still hidden
+    assert op.get(f"/admin/cards/{ctx['b_card_id']}").status_code == 403
+    assert ctx["b_code"] not in op.get("/admin/cards").text
+    # ... whereas a card the operator issues for BetaApp is visible to it
+    r = op.post(
+        "/admin/cards/generate",
+        data={"application_id": ctx["b_id"], "days": 1, "max_devices": 1, "count": 1, "prefix": "OPB-"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "OPB-" in op.get("/admin/cards").text
 
     # revoke everything -> operator sees nothing and gets the "not assigned" hint
     r = sup.post(f"/admin/admins/{ctx['op_id']}/apps", data={}, follow_redirects=False)
@@ -330,7 +395,8 @@ def test_super_reassigns_apps_and_it_takes_effect_immediately(ctx):
     html = op.get("/admin/cards/generate").text
     assert ctx["a_key"] not in html and "尚未分配" in html
     assert op.get(f"/admin/cards/{ctx['a_card_id']}").status_code == 403
-    assert ctx["a_code"] not in op.get("/admin/cards").text
+    html = op.get("/admin/cards").text
+    assert ctx["a_code"] not in html and "OPGEN-" not in html and "OPB-" not in html
     assert "MACHINE-ALPHA" not in op.get("/admin/devices").text
 
     # super assigning apps to a super is a no-op

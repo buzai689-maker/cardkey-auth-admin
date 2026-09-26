@@ -14,10 +14,12 @@ from ..utils import paginate, to_int
 router = APIRouter(prefix="/admin/cards")
 
 
-def _base_query(db, admin, status, type_id, batch, q, application_id=0):
+def _base_query(db, admin, status, type_id, batch, q, application_id=0, creator=""):
     query = db.query(Card).options(joinedload(Card.type), joinedload(Card.application))
-    # operators only ever see cards of the applications assigned to them
+    # operators only ever see their own cards within the applications assigned to them
     query = scope.scope_cards(query, admin)
+    if creator:
+        query = query.filter(Card.created_by == creator)
     if application_id:
         query = query.filter(Card.application_id == application_id)
     if status:
@@ -35,7 +37,8 @@ def _load_card(db, request, admin, card_id, *options):
     """Fetch a card the admin may act on.
 
     Returns None when the card does not exist; audit-logs and raises 403 when
-    it belongs to an application outside the admin's scope.
+    it is outside the admin's scope (other application, or issued by someone
+    else in the case of an operator).
     """
     query = db.query(Card).filter_by(id=card_id)
     if options:
@@ -55,13 +58,19 @@ def list_cards(
     application_id: int = 0,
     batch: str = "",
     q: str = "",
+    creator: str = "",
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, admin, status, type_id, batch, q.strip(), application_id)
+    creator = creator.strip()
+    query = _base_query(db, admin, status, type_id, batch, q.strip(), application_id, creator)
     items, pg = paginate(query, page, per_page=20)
     types = db.query(CardType).order_by(CardType.id.desc()).all()
     apps = scope.visible_apps(db, admin)
+    # super admins can filter by who issued the cards (owner vs. each agent)
+    creators = []
+    if scope.is_super(admin):
+        creators = sorted(v for (v,) in db.query(Card.created_by).distinct().all() if v)
     return render(
         request,
         "admin/cards.html",
@@ -70,12 +79,14 @@ def list_cards(
         pg=pg,
         types=types,
         apps=apps,
+        creators=creators,
         f={
             "status": status,
             "type_id": type_id,
             "application_id": application_id,
             "batch": batch,
             "q": q,
+            "creator": creator,
         },
     )
 
@@ -128,7 +139,7 @@ def generate_do(
         prefix=prefix.strip(),
         length=length,
         group_size=to_int(group_size),
-        created_by=admin.username,
+        created_by=admin.username,  # ownership: operators only ever see their own cards
         remark=remark.strip(),
     )
     span = "永久" if permanent else f"{days}天"
@@ -151,10 +162,13 @@ def export_cards(
     application_id: int = 0,
     batch: str = "",
     q: str = "",
+    creator: str = "",
     admin: Admin = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    query = _base_query(db, admin, status, type_id, batch, q.strip(), application_id)
+    query = _base_query(
+        db, admin, status, type_id, batch, q.strip(), application_id, creator.strip()
+    )
     codes = [c.code for c in query.limit(20000).all()]
     fname = f"cards_{batch or 'all'}.txt"
     return PlainTextResponse(

@@ -22,7 +22,9 @@ def list_apps(
 ):
     # super: every app (with the operators assigned to each); operator: own apps, read-only
     apps = scope.visible_apps(db, admin)
-    counts = {a.id: app_svc.card_count(db, a) for a in apps}
+    # operators only see how many cards *they* issued per app
+    crit = scope.card_criterion(admin)
+    counts = {a.id: app_svc.card_count(db, a, crit) for a in apps}
     fps = {a.id: app_svc.key_fingerprint(a) for a in apps}
     operators = {
         a.id: [m.username for m in a.admins if m.role != "super"] for a in apps
